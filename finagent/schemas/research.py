@@ -1,0 +1,88 @@
+"""Financial research agent I/O models."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+from finagent.schemas.common import AgentName, AgentResultBase, SourceTier
+from finagent.schemas.financial import FinancialSummary, SavingsGoal
+from finagent.schemas.budget import BudgetPlan
+
+
+class ResearchMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=6000)
+
+
+class ResearchFinancialContext(BaseModel):
+    """Server-derived aggregates; excludes transaction descriptions and identity."""
+
+    model_config = ConfigDict(extra="forbid")
+    summary: FinancialSummary | None = None
+    savings_goal: SavingsGoal | None = None
+    budget: BudgetPlan | None = None
+    is_sample: bool = False
+    data_notes: list[str] = Field(default_factory=list)
+
+
+class ResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    financial_context: ResearchFinancialContext | None = None
+    conversation: list[ResearchMessage] = Field(default_factory=list, max_length=12)
+    response_language: str = Field(default="auto", min_length=2, max_length=64)
+    response_detail: Literal["brief", "detailed"] = "detailed"
+    jurisdiction: str = "IN"
+    max_sources: int = Field(default=5, ge=1, le=10)
+    preferred_domains: list[str] | None = None
+
+
+class SourceMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(..., pattern=r"^S\d+$")
+    title: str
+    url: HttpUrl
+    publisher: str | None = None
+    published_date: date | None = None
+    retrieved_at: datetime
+    tier: SourceTier
+    snippet: str | None = None
+
+
+class ResearchFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str
+    title: str | None = None
+    source_ids: list[str] = Field(..., min_length=1)
+    confidence: Literal["low", "medium", "high"]
+
+
+class ResearchResult(AgentResultBase):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: AgentName = AgentName.financial_research
+    question: str
+    calculated_answer: str | None = None
+    financial_context: ResearchFinancialContext | None = None
+    findings: list[ResearchFinding] = Field(default_factory=list)
+    sources: list[SourceMetadata] = Field(default_factory=list)
+    search_provider: str | None = None
+    disclaimer: str = Field(
+        default="Guidance uses the financial details available; it is not a guarantee of returns."
+    )
+
+    @model_validator(mode="after")
+    def _source_ids_exist(self) -> ResearchResult:
+        known = {s.source_id for s in self.sources}
+        for finding in self.findings:
+            missing = [sid for sid in finding.source_ids if sid not in known]
+            if missing:
+                raise ValueError(f"finding references unknown source_ids: {missing}")
+        return self

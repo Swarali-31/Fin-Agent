@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finagent"
+version = "0.1.0"
+description = "FinAgent — LangGraph-compatible personal finance agents (shared foundations)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings",
+    "langgraph",
+    "langchain",
+    "langchain-core",
+    "tavily-python",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+anthropic = ["langchain-anthropic"]
+openai = ["langchain-openai"]
+google = ["langchain-google-genai"]
+backend = ["fastapi>=0.115", "uvicorn>=0.34", "httpx>=0.27", "reportlab>=4,<5"]
+persistence = ["sqlalchemy>=2.0", "psycopg[binary]>=3.2"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["finagent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: tests needing real API keys; skipped when keys are absent",
+]
