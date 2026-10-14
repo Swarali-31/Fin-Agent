@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from finagent.schemas.common import AgentName, AgentResultBase, ExpenseCategory, Money
+from finagent.schemas.common import (
+    AgentName,
+    AgentResultBase,
+    ExpenseCategory,
+    Money,
+    validate_currency_code,
+)
 from finagent.schemas.expense import ExpenseAnalysisResult
 from finagent.schemas.financial import SavingsGoal
 
@@ -17,6 +23,12 @@ class BudgetRequest(BaseModel):
     expense_analysis: ExpenseAnalysisResult
     savings_goal: SavingsGoal | None = None
     essential_categories: list[ExpenseCategory] | None = None
+    currency: str | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def _currency(cls, value: str | None) -> str | None:
+        return validate_currency_code(value) if value is not None else None
 
 
 class CategoryBudget(BaseModel):
@@ -56,6 +68,7 @@ class BudgetPlan(AgentResultBase):
     source_analysis_version: str | None = None
     currency: str
     monthly_income: Money
+    essential_categories: list[ExpenseCategory] = Field(default_factory=list)
     category_limits: list[CategoryBudget] = Field(default_factory=list)
     planned_monthly_savings: Money
     feasibility: Feasibility
