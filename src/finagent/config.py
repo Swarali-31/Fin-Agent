@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,7 +28,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
 
-    search_provider: Literal["tavily"] = Field(default="tavily", alias="SEARCH_PROVIDER")
+    search_provider: str = Field(default="tavily", alias="SEARCH_PROVIDER")
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
     search_max_results: int = Field(default=5, alias="SEARCH_MAX_RESULTS")
     search_timeout_seconds: float = Field(default=30.0, alias="SEARCH_TIMEOUT_SECONDS")
