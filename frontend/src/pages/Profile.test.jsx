@@ -1,0 +1,22 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import Profile from "./Profile.jsx";
+import { listProfiles, deleteProfile } from "../services/profiles.js";
+vi.mock("../auth/AuthContext.jsx", () => ({useAuth: () => ({user:{id:"test",name:"Test",email:"test@example.invalid"}})}));
+vi.mock("../services/profiles.js", () => ({listProfiles:vi.fn(),deleteProfile:vi.fn(),createProfile:vi.fn()}));
+afterEach(() => {cleanup();localStorage.clear();vi.clearAllMocks();});
+it("lists profiles and confirms deletion before removing a selected profile", async () => {
+  localStorage.setItem("finagent.profileId","first");
+  listProfiles.mockResolvedValue([{profile_id:"first",currency:"INR",transaction_count:2,file_count:1},{profile_id:"second",currency:"USD"}]);
+  deleteProfile.mockResolvedValue({deleted:true});
+  render(<MemoryRouter><Profile /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button",{name:"Delete first"}));
+  expect(deleteProfile).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button",{name:"Cancel"}));
+  fireEvent.click(screen.getByRole("button",{name:"Delete first"}));
+  fireEvent.click(screen.getByRole("button",{name:"Permanently delete profile"}));
+  await waitFor(() => expect(deleteProfile).toHaveBeenCalledWith("first"));
+  await waitFor(() => expect(localStorage.getItem("finagent.profileId")).toBe("second"));
+  expect(screen.queryByRole("button",{name:"Delete first"})).toBeNull();
+});
