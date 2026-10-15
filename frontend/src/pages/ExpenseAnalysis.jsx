@@ -22,6 +22,7 @@ import {
   getTransactions,
   correctTransaction,
   updateTransactionSelection,
+  listProfiles,
 } from "../services/profiles.js";
 
 const PROFILE_KEY = "finagent.profileId";
@@ -155,9 +156,17 @@ export default function ExpenseAnalysis() {
   const [currency, setCurrency] = useState(() => getStored(CURRENCY_KEY, "INR"));
   const [transactions, setTransactions] = useState([]);
   const [savedTransactions, setSavedTransactions] = useState([]);
+  const [deletedTransactions, setDeletedTransactions] = useState([]);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [imports, setImports] = useState([]);
   const [selectedImport, setSelectedImport] = useState("");
+  const [transactionSearch, setTransactionSearch] = useState("");
+  const [transactionPage, setTransactionPage] = useState(1);
   const [transactionError, setTransactionError] = useState("");
+  const [profiles, setProfiles] = useState([]);
+  const [profileError, setProfileError] = useState("");
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [manual, setManual] = useState({
     id: "",
     date: new Date().toISOString().slice(0, 10),
@@ -180,6 +189,27 @@ export default function ExpenseAnalysis() {
   const [notice, setNotice] = useState("");
   const [runKey, setRunKey] = useState(0);
   const skipNextLoadRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    listProfiles().then((items) => {
+      if (!active) return;
+      const available = Array.isArray(items) ? items : items.items || [];
+      setProfiles(available); setProfileError("");
+      if (available.length && !available.some((item) => item.profile_id === profileId)) chooseProfile(available[0]);
+    }).catch((cause) => { if (active) setProfileError(cause.message || "Could not load your profiles."); });
+    return () => { active = false; };
+  }, [runKey]);
+
+  function chooseProfile(profile) {
+    setProfileId(profile.profile_id); setProfileInput(profile.profile_id); setCurrency(profile.currency);
+    setStored(PROFILE_KEY, profile.profile_id); setStored(CURRENCY_KEY, profile.currency);
+    setStored("finagent.sampleProfileId", profile.is_sample ? profile.profile_id : "");
+    setEditing(null); setSelectedRows([]); setDeletedRows([]); setTransactionError("");
+    setCorrectionMessage(""); setNotice("");
+    setTransactionSearch(""); setTransactionPage(1);
+    setShowDeleted(false); setDeletedTransactions([]);
+  }
 
   useEffect(() => {
     setSelectedRows([]); setDeletedRows([]); setSelectedImport(""); setImports([]); setSavedTransactions([]);
@@ -219,18 +249,26 @@ export default function ExpenseAnalysis() {
   useEffect(() => {
     if (!profileId) return;
     let active = true;
+    setTransactionsLoading(true);
     getTransactions(profileId).then((data) => { if (active) { applySavedData(data); setTransactionError(""); } })
-      .catch((cause) => { if (active) setTransactionError(cause.message); });
+      .catch((cause) => { if (active) setTransactionError(cause.message); })
+      .finally(() => { if (active) setTransactionsLoading(false); });
     return () => { active = false; };
   }, [profileId, runKey]);
 
   function applySavedData(data) {
     setSavedTransactions(data.transactions || []);
+    setDeletedTransactions(data.deleted_transactions || []);
     setImports(data.imports || []);
     if (data.currency) { setCurrency(data.currency); setStored(CURRENCY_KEY, data.currency); }
   }
   const activeImport = imports.find((item) => item.id === selectedImport);
-  const visibleTransactions = activeImport ? savedTransactions.filter((row) => activeImport.transaction_ids.includes(row.id)) : savedTransactions;
+  const sourceTransactions = showDeleted ? deletedTransactions : savedTransactions;
+  const visibleTransactions = (activeImport ? sourceTransactions.filter((row) => activeImport.transaction_ids.includes(row.id)) : sourceTransactions)
+    .filter((row) => `${row.date} ${row.description} ${row.category || ""} ${row.type}`.toLowerCase().includes(transactionSearch.toLowerCase()));
+  const totalTransactionPages = Math.max(1, Math.ceil(visibleTransactions.length / 10));
+  const currentTransactionPage = Math.min(transactionPage, totalTransactionPages);
+  const pageTransactions = visibleTransactions.slice((currentTransactionPage - 1) * 10, currentTransactionPage * 10);
   const knownImportIds = new Set(imports.flatMap((item) => item.transaction_ids));
   const untrackedCount = savedTransactions.filter((row) => !knownImportIds.has(row.id)).length;
 
@@ -285,8 +323,8 @@ export default function ExpenseAnalysis() {
     setNotice(payload?.status === "success" ? "Your spending analysis is ready below." : "Your totals are ready. Review the note below for any unavailable insights.");
   }
 
-  async function changeSelection(deleted) {
-    const ids = deleted ? selectedRows : deletedRows;
+  async function changeSelection(deleted, transactionIds) {
+    const ids = transactionIds || (deleted ? selectedRows : deletedRows);
     if (!ids.length) return;
     setUploading(true); setError(null);
     try {
@@ -488,7 +526,19 @@ export default function ExpenseAnalysis() {
     <div className="space-y-6">
       <section>
         <h1 className="page-title">Expense Analysis</h1>
-        <p className="mt-2 text-sm text-slate-600">Import or enter transactions, then run the expense analysis agent.</p>
+        <p className="mt-2 text-sm text-slate-600">Find your saved files and transactions, add new data, and review your spending in one place.</p>
+      </section>
+
+      <section className="surface-card expense-workspace" aria-label="Saved expense workspace">
+        <div className="expense-workspace-heading"><div><h2 className="text-base font-semibold">Your expense workspace</h2><p className="mt-1 text-sm text-slate-600">Data stays in the financial profile where you saved it. Choose a profile to find earlier uploads.</p></div><a className="text-sm text-brand-blue underline" href="/profile">Manage profiles</a></div>
+        <div className="expense-workspace-controls"><label className="text-sm font-medium">Financial profile<select aria-label="Financial profile" className="mt-2 block w-full rounded-md border border-slate-300 bg-white p-3 text-sm font-normal" value={profileId} disabled={uploading || transactions.length > 0} onChange={(event) => { const profile = profiles.find((item) => item.profile_id === event.target.value); if (profile) chooseProfile(profile); }}>
+          {!profiles.some((item) => item.profile_id === profileId) && <option value={profileId}>{profileId || "Choose a profile"}</option>}
+          {profiles.map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.profile_id} · {profile.currency} · {profile.transaction_count ?? 0} transactions · {profile.file_count ?? 0} files{profile.deleted_count ? ` · ${profile.deleted_count} deleted` : ""}{profile.is_sample ? " · Demo" : ""}</option>)}
+        </select></label><button type="button" className="rounded-md bg-brand-blue px-4 py-3 text-sm font-semibold text-white" disabled={!profileId || uploading} onClick={() => { setImportOpen(true); document.getElementById("import-files")?.scrollIntoView?.({behavior:"smooth"}); }}>Import files</button><button type="button" className="rounded-md border border-slate-300 px-4 py-3 text-sm" disabled={uploading} onClick={() => setRunKey((value) => value + 1)}>Refresh saved data</button></div>
+        {profileError && <p role="alert" className="mt-3 text-sm text-red-700">{profileError}</p>}
+        {transactions.length > 0 && <p className="mt-2 text-sm text-amber-800">Save or clear your staged transactions before changing profiles.</p>}
+        <dl className="expense-workspace-stats"><div><dt>Saved files</dt><dd>{transactionsLoading ? "…" : imports.length}</dd></div><div><dt>Saved transactions</dt><dd>{transactionsLoading ? "…" : savedTransactions.length}</dd></div><div><dt>Currency</dt><dd>{currency}</dd></div></dl>
+        <nav aria-label="Expense sections" className="flex flex-wrap gap-4 text-sm"><a className="text-brand-blue underline" href="#saved-files">Saved files</a><a className="text-brand-blue underline" href="#saved-transactions">Transactions</a><a className="text-brand-blue underline" href="#expense-insights">Spending analysis</a></nav>
       </section>
 
       {error && (
@@ -498,35 +548,32 @@ export default function ExpenseAnalysis() {
           onRetry={() => setRunKey((value) => value + 1)}
         />
       )}
-      <section className="surface-card space-y-3" aria-label="Uploaded files">
+      <section id="saved-files" className="surface-card space-y-3" aria-label="Uploaded files">
         <h2 className="font-semibold">Your uploaded files ({imports.length})</h2>
         <p className="text-sm text-slate-600">Saved for profile {profileId || "—"}. Open a file's transactions below, including after signing in again.</p>
-        <DataTable rows={imports} getRowKey={(row) => row.id} emptyTitle="No file history recorded yet. New CSV and JSON imports will appear here." columns={[
+        <DataTable rows={imports} getRowKey={(row) => row.id} emptyTitle={transactionsLoading ? "Loading saved files…" : "No file history recorded for this profile. Choose another profile above or import files below."} columns={[
           { key: "filename", header: "File name" },
           { key: "format", header: "Format", render: (row) => row.format.toUpperCase() },
           { key: "imported_at", header: "Added", render: (row) => new Date(row.imported_at).toLocaleString() },
           { key: "transaction_count", header: "Imported rows", numeric: true },
           { key: "period", header: "Transaction dates", render: (row) => `${row.period_start} – ${row.period_end}` },
-          { key: "view", header: "Open", render: (row) => <button type="button" className="text-brand-blue underline" onClick={() => { setSelectedImport(row.id); setSelectedRows([]); document.getElementById("saved-transactions")?.scrollIntoView?.({ behavior: "smooth" }); }}>View transactions for {row.filename}</button> },
+          { key: "view", header: "Open", render: (row) => <button type="button" className="text-brand-blue underline" onClick={() => { setSelectedImport(row.id); setShowDeleted(!savedTransactions.some((item) => row.transaction_ids.includes(item.id)) && deletedTransactions.some((item) => row.transaction_ids.includes(item.id))); setTransactionPage(1); setSelectedRows([]); document.getElementById("saved-transactions")?.scrollIntoView?.({ behavior: "smooth" }); }}>View transactions for {row.filename}</button> },
         ]} />
         {untrackedCount > 0 && <p className="text-sm text-slate-600">{untrackedCount} saved transaction(s) have no recorded source file (manual entries or older imports). They are available in All transactions; original filenames were not stored for older imports.</p>}
       </section>
-      <CsvImport profileId={profileId} onAnalyze={analyzeImported} onBusy={setUploading} />
-      <div className="surface-card flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Analyze saved transactions</h2><p className="mt-1 text-sm text-slate-600">Update insights after changing your transactions.</p></div><button type="button" className="rounded-md bg-brand-blue px-4 py-2 text-white disabled:opacity-50" disabled={!profileId || !savedTransactions.length || loading || uploading} onClick={() => void analyzeSavedTransactions()}>{loading ? "Please wait…" : "Analyze saved transactions"}</button></div>
-      {analysis?.is_current === false && <Warning title="Your transactions changed" message="Run Analyze saved transactions again to update these results before creating a budget or report." />}
-      {analysisStatus && <StatusBadge status={analysisStatus} label={`Analysis ${analysisStatus}`} />}
-      {analysisStatus === "partial" && (
-        <Warning title="Partial analysis" message="The agent returned partial results. Review its data gaps and limitations before relying on the analysis." />
-      )}
-      {analysisStatus === "failed" && (
-        <ErrorState title="Analysis failed" message="The agent reported failed status. Results are not presented as a successful analysis." />
-      )}
-      {deletedRows.length > 0 && <button type="button" disabled={uploading} className="text-brand-blue underline" onClick={() => changeSelection(false)}>Undo deletion ({deletedRows.length})</button>}
-      {correctionMessage && <p role="status" className="text-sm text-amber-800">{correctionMessage}</p>}
-      {editing && <form className="surface-card space-y-3" onSubmit={saveCorrection}><h2 className="font-semibold">Correct this saved transaction</h2><label className="block text-sm">Description<input aria-label="Correct description" value={editing.description} onChange={(event) => setEditing({ ...editing, description:event.target.value })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Date<input aria-label="Correct date" type="date" value={editing.date} onChange={(event) => setEditing({ ...editing, date:event.target.value })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Amount<input aria-label="Correct amount" type="number" min="0.01" step="0.01" value={editing.amount.amount} onChange={(event) => setEditing({ ...editing, amount:{amount:event.target.value} })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Type<select aria-label="Correct type" value={editing.type} onChange={(event) => setEditing({ ...editing, type:event.target.value })} className="ml-2 rounded border p-2">{["income","expense","refund","transfer"].map((kind) => <option key={kind}>{kind}</option>)}</select></label><label className="block text-sm">Category<select aria-label="Correct category" value={editing.category || "other"} onChange={(event) => setEditing({...editing, category:event.target.value})} className="ml-2 rounded border p-2">{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></label><label className="block text-sm">Recurring payment<select aria-label="Recurring payment" className="ml-2 rounded border p-2" value={editing.is_recurring == null ? "unknown" : String(editing.is_recurring)} onChange={(event) => setEditing({...editing, is_recurring:event.target.value === "unknown" ? null : event.target.value === "true"})}><option value="unknown">Not sure</option><option value="true">Yes</option><option value="false">No</option></select></label><button disabled={uploading} className="rounded bg-brand-blue px-4 py-2 text-white">Save correction</button><button className="ml-3 underline" type="button" onClick={() => setEditing(null)}>Cancel</button></form>}
-      {notice && <p className="text-sm text-slate-600" role="status">{notice}</p>}
-
-      <details className="surface-card space-y-4"><summary className="cursor-pointer font-semibold">Add transactions manually or import JSON</summary>
+      {transactionsLoading && <Loading label="Loading your saved files and transactions" />}
+      {transactionError && <ErrorState title="Saved transactions unavailable" message={transactionError} onRetry={() => setRunKey((value) => value + 1)} />}
+      <section id="saved-transactions" className="surface-card"><h2 className="font-semibold">{showDeleted ? `Deleted transactions (${deletedTransactions.length})` : `Your saved transactions (${savedTransactions.length}) — manage`}</h2><div className="my-3 flex flex-wrap gap-2" aria-label="Transaction views"><button type="button" aria-pressed={!showDeleted} className={`rounded border px-3 py-2 text-sm ${!showDeleted ? "border-brand-blue bg-brand-blue text-white" : "border-slate-300"}`} onClick={() => { setShowDeleted(false); setSelectedRows([]); setTransactionPage(1); }}>Active ({savedTransactions.length})</button><button type="button" aria-pressed={showDeleted} className={`rounded border px-3 py-2 text-sm ${showDeleted ? "border-brand-blue bg-brand-blue text-white" : "border-slate-300"}`} onClick={() => { setShowDeleted(true); setSelectedRows([]); setTransactionPage(1); }}>Deleted ({deletedTransactions.length})</button></div>{deletedTransactions.length > 0 && <p className="mb-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">{deletedTransactions.length} transactions are in Deleted. They are still saved and can be restored here, even after signing in again.</p>}<label className="my-3 block text-sm">Show transactions<select aria-label="Filter by uploaded file" className="ml-2 rounded border p-2" value={selectedImport} onChange={(event) => { setSelectedImport(event.target.value); setTransactionPage(1); setSelectedRows([]); }}><option value="">All transactions</option>{imports.map((item) => <option key={item.id} value={item.id}>{item.filename} · {new Date(item.imported_at).toLocaleString()}</option>)}</select></label><label className="my-3 block text-sm">Search transactions<input aria-label="Search saved transactions" type="search" className="ml-2 rounded-md border border-slate-300 p-2" placeholder="Description, date or category" value={transactionSearch} onChange={(event) => { setTransactionSearch(event.target.value); setTransactionPage(1); setSelectedRows([]); }} /></label><p className="text-sm text-slate-600">Showing {visibleTransactions.length} {showDeleted ? "deleted" : "active"} transaction(s){activeImport ? ` from ${activeImport.filename}` : " across all sources"}.</p><div className="my-3 flex gap-4 items-center"><label><input type="checkbox" aria-label="Select all saved transactions" checked={pageTransactions.length > 0 && pageTransactions.every((row) => selectedRows.includes(row.id))} onChange={(event) => setSelectedRows(event.target.checked ? pageTransactions.map((row) => row.id) : [])} /> Select this page</label><button type="button" disabled={!selectedRows.length || uploading} className="rounded border border-red-300 px-3 py-2 text-red-700 disabled:opacity-50" onClick={() => changeSelection(!showDeleted, selectedRows)}>{showDeleted ? "Restore selected" : "Delete selected"} ({selectedRows.length})</button></div><DataTable rows={pageTransactions} getRowKey={(row) => row.id} emptyTitle={transactionsLoading ? "Loading saved transactions…" : showDeleted ? "No deleted transactions in this view." : activeImport ? "No active transactions remain for this file. Check the Deleted view to restore them." : "No active transactions in this profile. Check Deleted, choose another profile, or import files below."} columns={[
+        { key: "select", header: "Select", render: (row) => <input type="checkbox" aria-label={`Select ${row.description} ${row.date} ${row.id}`} checked={selectedRows.includes(row.id)} onChange={(event) => setSelectedRows((ids) => event.target.checked ? [...ids,row.id] : ids.filter((id) => id !== row.id))} /> },
+        { key: "date", header: "Date" }, { key: "description", header: "Description" },
+        { key: "type", header: "Type" }, { key: "category", header: "Category", render: (row) => (row.category || "Uncategorized").replaceAll("_", " ") },
+        { key: "amount", header: "Amount", numeric: true, render: (row) => formatMoney(row.amount?.amount, currency) },
+        { key: "edit", header: showDeleted ? "Restore" : "Correct", render: (row) => showDeleted ? <button type="button" disabled={uploading} className="text-brand-blue underline" onClick={() => changeSelection(false, [row.id])}>Restore {row.description}</button> : <button type="button" className="text-brand-blue underline" onClick={() => { setEditing(row); setCorrectionMessage(""); }}>Edit {row.description}</button> },
+      ]} /><div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm"><span>Page {currentTransactionPage} of {totalTransactionPages} · {visibleTransactions.length} matching transactions</span><div className="flex gap-2"><button type="button" className="rounded border border-slate-300 px-3 py-2 disabled:opacity-40" disabled={currentTransactionPage <= 1} onClick={() => { setTransactionPage(currentTransactionPage-1); setSelectedRows([]); }}>Previous</button><button type="button" className="rounded border border-slate-300 px-3 py-2 disabled:opacity-40" disabled={currentTransactionPage >= totalTransactionPages} onClick={() => { setTransactionPage(currentTransactionPage+1); setSelectedRows([]); }}>Next</button></div></div></section>
+      <details id="import-files" className="surface-card" open={importOpen} onToggle={(event) => setImportOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer font-semibold">Import files or add transactions</summary>
+        <div className="mt-4"><CsvImport key={profileId} profileId={profileId} onAnalyze={analyzeImported} onBusy={setUploading} /></div>
+      <details className="mt-5 space-y-4 border-t border-slate-200 pt-4"><summary className="cursor-pointer font-semibold">Add transactions manually or import JSON</summary>
         <h2 className="text-base font-semibold text-slate-800">Add your income and expenses</h2>
         <p className="text-sm text-slate-500">Add transactions to the list below, then choose Save and analyze. Your account keeps your saved history.</p>
         <details className="profile-settings"><summary>Profile and currency settings</summary>
@@ -570,7 +617,7 @@ export default function ExpenseAnalysis() {
         )}
         {transactions.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <p className="text-sm text-slate-600">{transactions.length} validated transaction(s) staged.</p>
+            <p className="text-sm text-slate-600">{transactions.length} validated transaction(s) staged.</p><button className="text-sm text-slate-600 underline" type="button" disabled={uploading || loading} onClick={() => setTransactions([])}>Clear staged rows</button>
             <div className="flex gap-2">
               {profileId && <button className="rounded-md border border-slate-300 px-3 py-2 text-sm" type="button" onClick={saveStagedTransactions} disabled={uploading}>{uploading ? "Saving…" : "Save transactions"}</button>}
               <button className="rounded-md bg-brand-blue px-3 py-2 text-sm font-semibold text-white" type="button" onClick={runAnalysis} disabled={loading}>{loading ? "Saving and analyzing…" : "Save and analyze"}</button>
@@ -591,16 +638,26 @@ export default function ExpenseAnalysis() {
           </div>
         )}
       </details>
+      </details>
+      <div id="expense-insights" className="surface-card flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Analyze saved transactions</h2><p className="mt-1 text-sm text-slate-600">Update insights after changing your transactions.</p></div><button type="button" className="rounded-md bg-brand-blue px-4 py-2 text-white disabled:opacity-50" disabled={!profileId || !savedTransactions.length || loading || uploading} onClick={() => void analyzeSavedTransactions()}>{loading ? "Please wait…" : "Analyze saved transactions"}</button></div>
+      {analysis?.is_current === false && <Warning title="Your transactions changed" message="Run Analyze saved transactions again to update these results before creating a budget or report." />}
+      {analysisStatus && <StatusBadge status={analysis?.is_current === false ? "warning" : analysisStatus} label={analysis?.is_current === false ? "Analysis needs updating" : `Analysis ${analysisStatus}`} />}
+      {analysisStatus === "partial" && (
+        <Warning title="Partial analysis" message="The agent returned partial results. Review its data gaps and limitations before relying on the analysis." />
+      )}
+      {analysisStatus === "failed" && (
+        <ErrorState title="Analysis failed" message="The agent reported failed status. Results are not presented as a successful analysis." />
+      )}
+      {deletedRows.length > 0 && <button type="button" disabled={uploading} className="text-brand-blue underline" onClick={() => changeSelection(false)}>Undo deletion ({deletedRows.length})</button>}
+      {correctionMessage && <p role="status" className="text-sm text-amber-800">{correctionMessage}</p>}
+      {editing && <form className="surface-card space-y-3" onSubmit={saveCorrection}><h2 className="font-semibold">Correct this saved transaction</h2><label className="block text-sm">Description<input aria-label="Correct description" value={editing.description} onChange={(event) => setEditing({ ...editing, description:event.target.value })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Date<input aria-label="Correct date" type="date" value={editing.date} onChange={(event) => setEditing({ ...editing, date:event.target.value })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Amount<input aria-label="Correct amount" type="number" min="0.01" step="0.01" value={editing.amount.amount} onChange={(event) => setEditing({ ...editing, amount:{amount:event.target.value} })} className="ml-2 rounded border p-2" required /></label><label className="block text-sm">Type<select aria-label="Correct type" value={editing.type} onChange={(event) => setEditing({ ...editing, type:event.target.value })} className="ml-2 rounded border p-2">{["income","expense","refund","transfer"].map((kind) => <option key={kind}>{kind}</option>)}</select></label><label className="block text-sm">Category<select aria-label="Correct category" value={editing.category || "other"} onChange={(event) => setEditing({...editing, category:event.target.value})} className="ml-2 rounded border p-2">{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></label><label className="block text-sm">Recurring payment<select aria-label="Recurring payment" className="ml-2 rounded border p-2" value={editing.is_recurring == null ? "unknown" : String(editing.is_recurring)} onChange={(event) => setEditing({...editing, is_recurring:event.target.value === "unknown" ? null : event.target.value === "true"})}><option value="unknown">Not sure</option><option value="true">Yes</option><option value="false">No</option></select></label><button disabled={uploading} className="rounded bg-brand-blue px-4 py-2 text-white">Save correction</button><button className="ml-3 underline" type="button" onClick={() => setEditing(null)}>Cancel</button></form>}
+      {notice && <p className="text-sm text-slate-600" role="status">{notice}</p>}
+
+
 
       {loading && <Loading label="Loading expense analysis" />}
-      {transactionError && <ErrorState title="Saved transactions unavailable" message={transactionError} />}
-      <section id="saved-transactions" className="surface-card"><h2 className="font-semibold">Your saved transactions ({savedTransactions.length}) — manage</h2><label className="my-3 block text-sm">Show transactions<select aria-label="Filter by uploaded file" className="ml-2 rounded border p-2" value={selectedImport} onChange={(event) => { setSelectedImport(event.target.value); setSelectedRows([]); }}><option value="">All transactions</option>{imports.map((item) => <option key={item.id} value={item.id}>{item.filename} · {new Date(item.imported_at).toLocaleString()}</option>)}</select></label><p className="text-sm text-slate-600">Showing {visibleTransactions.length} saved transaction(s){activeImport ? ` from ${activeImport.filename}` : " across all sources"}.</p><div className="my-3 flex gap-4 items-center"><label><input type="checkbox" aria-label="Select all saved transactions" checked={visibleTransactions.length > 0 && selectedRows.length === visibleTransactions.length} onChange={(event) => setSelectedRows(event.target.checked ? visibleTransactions.map((row) => row.id) : [])} /> Select all</label><button type="button" disabled={!selectedRows.length || uploading} className="rounded border border-red-300 px-3 py-2 text-red-700 disabled:opacity-50" onClick={() => changeSelection(true)}>Delete selected ({selectedRows.length})</button></div><DataTable rows={visibleTransactions} getRowKey={(row) => row.id} emptyTitle={activeImport ? "No active transactions remain for this file." : "No saved transactions yet. Add your first expense above."} columns={[
-        { key: "select", header: "Select", render: (row) => <input type="checkbox" aria-label={`Select ${row.description} ${row.date} ${row.id}`} checked={selectedRows.includes(row.id)} onChange={(event) => setSelectedRows((ids) => event.target.checked ? [...ids,row.id] : ids.filter((id) => id !== row.id))} /> },
-        { key: "date", header: "Date" }, { key: "description", header: "Description" },
-        { key: "type", header: "Type" }, { key: "category", header: "Category", render: (row) => (row.category || "Uncategorized").replaceAll("_", " ") },
-        { key: "amount", header: "Amount", numeric: true, render: (row) => formatMoney(row.amount?.amount, currency) },
-        { key: "edit", header: "Correct", render: (row) => <button type="button" className="text-brand-blue underline" onClick={() => { setEditing(row); setCorrectionMessage(""); }}>Edit {row.description}</button> },
-      ]} /></section>
+
+
       {!loading && !analysis && !error && transactions.length === 0 && (
         <Empty title="Start with your transactions" description="Upload a CSV, check its preview, then choose Analyze my spending. We will explain where your money went." />
       )}

@@ -6,14 +6,24 @@ import { Loading, ErrorState } from "../components/StateViews.jsx";
 const AuthContext = createContext(null);
 const workspaceKeys = ["finagent.profileId", "finagent.currency", "finagent.sampleProfileId", "finagent.userId"];
 function clearWorkspace() {
-  try { workspaceKeys.forEach((key) => localStorage.removeItem(key)); } catch { /* No financial data is stored here. */ }
+  try {
+    const userId = localStorage.getItem("finagent.userId");
+    const profileId = localStorage.getItem("finagent.profileId");
+    if (userId && profileId) localStorage.setItem(`finagent.workspace.${userId}`, JSON.stringify({ profileId, currency:localStorage.getItem("finagent.currency"), isSample:localStorage.getItem("finagent.sampleProfileId") === profileId }));
+    workspaceKeys.forEach((key) => localStorage.removeItem(key));
+  } catch { /* No financial data is stored here. */ }
 }
 function rememberWorkspace(user) {
   try {
     if (localStorage.getItem("finagent.userId") !== user.id) clearWorkspace();
     localStorage.setItem("finagent.userId", user.id);
-    if (!localStorage.getItem("finagent.profileId") && user.profile_id) localStorage.setItem("finagent.profileId", user.profile_id);
-    localStorage.setItem("finagent.currency", user.currency || "INR");
+    let preferred = {};
+    try { preferred = JSON.parse(localStorage.getItem(`finagent.workspace.${user.id}`) || "{}") || {}; } catch { /* Use the server-selected profile. */ }
+    const current = localStorage.getItem("finagent.profileId");
+    const profileId = current || preferred.profileId || user.profile_id;
+    if (profileId) localStorage.setItem("finagent.profileId", profileId);
+    localStorage.setItem("finagent.currency", (current ? localStorage.getItem("finagent.currency") : preferred.currency) || user.currency || "INR");
+    if (!current && preferred.isSample && preferred.profileId === profileId) localStorage.setItem("finagent.sampleProfileId", profileId);
   } catch { /* The account remains authenticated through its HttpOnly cookie. */ }
 }
 

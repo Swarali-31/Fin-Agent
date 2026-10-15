@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { addTransactions, previewTransactionsCsv } from "../services/profiles.js";
 
 const CATEGORIES = ["housing","groceries","utilities","transport","dining","entertainment","healthcare","education","insurance","debt_payment","subscriptions","shopping","travel","other"];
 const FIELDS = { date: "Date", description: "Description or merchant", amount: "Amount", debit: "Debit / money out", credit: "Credit / money in", type: "Transaction type", category: "Category (optional)", id: "Reference / ID (optional)", currency: "Currency (optional)", is_recurring: "Recurring (optional)" };
-export default function CsvImport({ profileId, onAnalyze, onBusy }) {
+function CsvFileReview({ profileId, onAnalyze, onBusy, initialFile, onSaved, onComplete }) {
   const [typeOverrides, setTypeOverrides] = useState({});
   const [categoryOverrides, setCategoryOverrides] = useState({});
   const [showAll, setShowAll] = useState(false);
@@ -38,8 +38,8 @@ export default function CsvImport({ profileId, onAnalyze, onBusy }) {
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [text, profileId, mapping, dateFormat, convention, numberFormat, saved]);
-  async function selectFile(event) {
-    const selected = event.target.files?.[0]; event.target.value = "";
+  useEffect(() => { if (initialFile) void loadFile(initialFile); }, [initialFile]);
+  async function loadFile(selected) {
     if (!selected) return;
     setError(""); setPreview(null); setSaved(false); setFinished(false); setExcluded([]); setMapping(null); setDateFormat("auto"); setConvention("auto"); setNumberFormat("decimal_point"); setDuplicatePolicy("review");
     if (!selected.name.toLowerCase().endsWith(".csv")) { setError("Choose a CSV file. PDF bank statements and spreadsheets must be exported as CSV first."); setText(""); return; }
@@ -56,6 +56,7 @@ export default function CsvImport({ profileId, onAnalyze, onBusy }) {
   async function analyze() {
     if (!canAnalyze && !saved) return;
     setError("");
+    let savedThisAttempt = saved;
     try {
       if (!saved) {
         setPhase("Saving your transactions…");
@@ -66,23 +67,19 @@ export default function CsvImport({ profileId, onAnalyze, onBusy }) {
           used.add(value.id); return value;
         });
         await addTransactions(profileId, transactions, { filename: file, format: "csv" });
-        setSaved(true);
+        setSaved(true); savedThisAttempt = true; onSaved?.();
       }
       setPhase("Analyzing your spending… This can take a minute.");
       await onAnalyze();
-      setFinished(true);
-    } catch (cause) { setError(`${saved ? "Your transactions are already saved. " : ""}${cause.message || "Please try again."}`); }
+      setFinished(true); onComplete?.();
+    } catch (cause) { setError(`${savedThisAttempt ? "Your transactions are already saved. " : ""}${cause.message || "Please try again."}`); }
     finally { setPhase(""); }
   }
-  return <section className="surface-card space-y-4" aria-labelledby="upload-title">
-    <h2 id="upload-title" className="text-lg font-semibold">1. Upload your transactions</h2>
-    <p className="text-sm text-slate-600">Upload your bank statement or expense CSV. We support date, description/narration/merchant, and either an amount or separate debit and credit columns. No transaction IDs are needed. Files must use UTF-8 text, with up to 5,000 rows.</p>
-    <p className="text-sm"><a className="text-brand-blue underline" href="/sample-expenses.csv" download>Download a clearly labelled sample CSV</a> · <a href="/profile" className="text-brand-blue underline">Choose your profile and currency</a></p>
-    {!profileId && <p role="alert">Choose or create a financial profile first so your transactions are saved in the right place.</p>}
-    <label className="block rounded-lg border-2 border-dashed border-slate-300 p-5 text-sm font-medium">Choose a CSV file<input aria-label="Upload expense CSV" className="mt-3 block w-full" type="file" accept=".csv,text/csv" onChange={selectFile} disabled={!profileId || Boolean(phase)} /></label>
+  return <section className="space-y-4" aria-label={`Review ${file || initialFile?.name || "CSV"}`}>
+    {!profileId && <p role="alert">Choose a financial profile before importing.</p>}
     {loading && <p role="status">Reading and checking your file…</p>}
     {preview && <details open={!finished}><summary className="cursor-pointer font-medium">{finished ? `${ready.length} transactions imported — view file details` : "Review this file before saving"}</summary>
-      <h2 className="text-lg font-semibold">2. Check your file</h2>
+      <h3 className="font-semibold">Review {file}</h3>
       <p className="text-sm">{file} · {preview.row_count} rows. Nothing is saved until you choose Analyze my spending.</p>
       <details open={Boolean(preview.issues.length)}><summary className="cursor-pointer font-medium">Check or change column mapping</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{Object.entries(FIELDS).map(([key,label]) => <label className="text-sm" key={key}>{label}<select aria-label={`${label} column`} disabled={saved || Boolean(phase)} className="mt-1 block w-full rounded-md border border-slate-300 p-2" value={(mapping || preview.mapping)[key] || ""} onChange={(event) => setMapping({ ...preview.mapping, ...mapping, [key]: event.target.value })}><option value="">Not in this file</option>{preview.headers.map((header) => <option key={header}>{header}</option>)}</select></label>)}</div></details>
       <p className="text-sm text-slate-600">Detected columns: Date = {preview.mapping.date || "choose above"}; description = {preview.mapping.description || "choose above"}; amount = {preview.mapping.amount || `${preview.mapping.debit || "debit?"} / ${preview.mapping.credit || "credit?"}`}.</p>
@@ -103,8 +100,43 @@ export default function CsvImport({ profileId, onAnalyze, onBusy }) {
       {invalid.length > 0 && <p className="text-sm text-amber-800">Correct or exclude {invalid.length} unreadable row(s) before continuing.</p>}
       <button type="button" onClick={() => void analyze()} disabled={!(canAnalyze || (saved && !finished && !phase))} className="rounded-md bg-brand-blue px-5 py-3 font-semibold text-white disabled:opacity-50">{phase || (finished ? "Transactions saved and analyzed" : saved ? "Retry spending analysis" : "Analyze my spending")}</button>
       {saved && !finished && !phase && <p className="text-sm">Your transactions are saved. Retrying analysis will not import them again.</p>}
+      {saved && !finished && !phase && <button type="button" className="text-sm text-brand-blue underline" onClick={() => onComplete?.("saved_only")}>Continue to the next file; analyze saved transactions later</button>}
       {phase && <p role="status" className="text-sm">{phase}</p>}
     </details>}
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+  </section>;
+}
+
+
+export default function CsvImport({ profileId, onAnalyze, onBusy }) {
+  const [queue, setQueue] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const active = queue.find((item) => !["complete", "saved_only", "skipped"].includes(item.status));
+  const completed = queue.filter((item) => ["complete", "saved_only"].includes(item.status)).length;
+  const busyChanged = useCallback((value) => { setBusy(value); onBusy?.(value); }, [onBusy]);
+  useEffect(() => { setQueue([]); setError(""); }, [profileId]);
+  function selectFiles(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+    if (queue.length + files.length > 20) { setError("Choose up to 20 files per import session."); return; }
+    setError("");
+    setQueue((previous) => [...previous, ...files.map((file) => ({ id: crypto.randomUUID(), file, status: "waiting" }))]);
+  }
+  function mark(id, status) {
+    setQueue((previous) => previous.map((item) => item.id === id ? { ...item, status } : item));
+  }
+  return <section className="space-y-4" aria-label="Import CSV files">
+    <div className="import-dropzone">
+      <div><h3 className="font-semibold">Choose your CSV files</h3><p className="mt-1 text-sm text-slate-600">Select multiple files together. Review and save each file in order.</p><p className="mt-2 text-xs text-slate-500">CSV · UTF-8 · 2 MB and 5,000 rows per file · up to 20 files</p></div>
+      <label className="import-picker">Choose files<input aria-label="Upload expense CSV" className="mt-2 block max-w-full text-sm" type="file" multiple accept=".csv,text/csv" onChange={selectFiles} disabled={!profileId || busy} /></label>
+    </div>
+    <div className="flex flex-wrap gap-4 text-sm"><a className="text-brand-blue underline" href="/sample-expenses.csv" download>Download sample CSV</a><details><summary className="cursor-pointer text-slate-600">Supported columns</summary><p className="mt-2 max-w-2xl text-sm text-slate-600">Include a date, description or narration, and either amount and type, or separate debit and credit columns. Transaction IDs are optional. Review ambiguous dates and duplicate rows before saving.</p></details></div>
+    {!profileId && <p role="alert">Choose or create a financial profile first.</p>}
+    {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+    {queue.length > 0 && <div className="rounded-lg border border-slate-200"><div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold">Selected files · {completed} of {queue.length} completed</div><ol aria-label="Selected file queue" className="divide-y divide-slate-100">{queue.map((item,index) => <li key={item.id} className={`flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm ${active?.id === item.id ? "bg-emerald-50" : ""}`}><span className="min-w-0 break-all"><span className="mr-2 text-slate-400">{index + 1}.</span>{item.file.name}</span><span className="text-xs text-slate-600">{item.status === "complete" ? "Saved and analyzed" : item.status === "saved_only" ? "Saved · analysis pending" : item.status === "skipped" ? "Skipped" : item.status === "saved" ? "Saved · analysis pending" : active?.id === item.id ? "Review now" : "Waiting"}</span></li>)}</ol></div>}
+    {active && <div className="space-y-4 rounded-lg border border-slate-200 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm font-semibold">Reviewing file {queue.indexOf(active) + 1} of {queue.length}</p>{active.status !== "saved" && <button type="button" disabled={busy} className="text-sm text-slate-600 underline" onClick={() => mark(active.id,"skipped")}>Skip this file</button>}</div><CsvFileReview key={`${profileId}:${active.id}`} initialFile={active.file} profileId={profileId} onAnalyze={onAnalyze} onBusy={busyChanged} onSaved={() => mark(active.id,"saved")} onComplete={(status) => mark(active.id,status || "complete")} /></div>}
+    {!active && completed > 0 && <p role="status" className="rounded-lg bg-emerald-50 p-4 text-sm text-emerald-900">{completed} file(s) saved. Find them in Saved files above. Use Analyze saved transactions to refresh your insights when needed.</p>}
   </section>;
 }

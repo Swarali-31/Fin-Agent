@@ -44,6 +44,7 @@ async def get_transactions(request: Request, profile_id: str) -> Any:
     repository = services.configured_repository(request=request)
     profile = services.stored_profile(repository, profile_id)
     return success(request, {"profile_id": profile_id, "transactions": profile["transactions"],
+                             "deleted_transactions": [row["transaction"] for row in repository.get_transactions(profile_id, include_deleted=True) if row["deleted"]],
                              "is_sample": repository.get_profile(profile_id)["is_sample"],
                              "currency": profile["currency"],
                              "imports": repository.get_profile(profile_id).get("imports", [])})

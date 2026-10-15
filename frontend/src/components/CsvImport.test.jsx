@@ -31,3 +31,37 @@ it("makes every invalid row visible and requires explicit exclusion",async()=>{
  expect(screen.getByText("Unreadable date")).toBeTruthy();expect(screen.getByRole("button",{name:"Analyze my spending"}).disabled).toBe(true);
  fireEvent.click(screen.getByRole("button",{name:"Exclude row 3"}));expect(screen.getByRole("button",{name:"Analyze my spending"}).disabled).toBe(false);
 });
+
+it("accepts multiple files and reviews the next only after the previous file is saved", async () => {
+  const first = new File(["first"], "first.csv", {type:"text/csv"}); first.text = async () => "first";
+  const second = new File(["second"], "second.csv", {type:"text/csv"}); second.text = async () => "second";
+  previewTransactionsCsv.mockImplementation(async (_profile, body) => ({...preview, rows:[{...preview.rows[0],transaction:{...transaction,id:body.csv_text}}]}));
+  const analyze = vi.fn().mockResolvedValue();
+  render(<CsvImport profileId="TEST" onAnalyze={analyze} />);
+  expect(screen.getByLabelText("Upload expense CSV").multiple).toBe(true);
+  fireEvent.change(screen.getByLabelText("Upload expense CSV"), {target:{files:[first, second]}});
+  await screen.findByText("Review first.csv");
+  expect(previewTransactionsCsv).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", {name:"Analyze my spending"}));
+  await screen.findByText("Review second.csv");
+  expect(addTransactions.mock.calls[0][2]).toEqual({filename:"first.csv",format:"csv"});
+  expect(previewTransactionsCsv.mock.calls[1][1].csv_text).toBe("second");
+  fireEvent.click(screen.getByRole("button", {name:"Analyze my spending"}));
+  await screen.findByText(/2 file\(s\) saved/);
+  expect(addTransactions.mock.calls[1][2]).toEqual({filename:"second.csv",format:"csv"});
+  expect(analyze).toHaveBeenCalledTimes(2);
+});
+
+it("can continue a multi-file import after analysis fails without saving the first twice", async () => {
+  const first = new File(["first"], "first.csv"); first.text = async () => "first";
+  const second = new File(["second"], "second.csv"); second.text = async () => "second";
+  const analyze = vi.fn().mockRejectedValueOnce(new Error("Provider unavailable")).mockResolvedValue();
+  render(<CsvImport profileId="TEST" onAnalyze={analyze} />);
+  fireEvent.change(screen.getByLabelText("Upload expense CSV"), {target:{files:[first,second]}});
+  await screen.findByText("Review first.csv");
+  fireEvent.click(screen.getByRole("button", {name:"Analyze my spending"}));
+  await screen.findByText(/Provider unavailable/);
+  fireEvent.click(screen.getByRole("button", {name:/Continue to the next file/}));
+  await screen.findByText("Review second.csv");
+  expect(addTransactions).toHaveBeenCalledTimes(1);
+});
