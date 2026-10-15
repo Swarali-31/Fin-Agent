@@ -1,0 +1,12 @@
+id,date,description,amount,type,category,is_recurring
+05_high_spending-9-salary,2026-09-01,DEMO - Salary or freelance income,60000,income,,true
+05_high_spending-9-housing,2026-09-02,DEMO - housing,28000.00,expense,housing,true
+05_high_spending-9-groceries,2026-09-03,DEMO - groceries,8400.00,expense,groceries,false
+05_high_spending-9-utilities,2026-09-04,DEMO - utilities,4200.00,expense,utilities,true
+05_high_spending-9-transport,2026-09-05,DEMO - transport,5600.00,expense,transport,false
+05_high_spending-9-dining,2026-09-06,DEMO - dining,9800.00,expense,dining,false
+05_high_spending-9-shopping,2026-09-07,DEMO - shopping,7000.00,expense,shopping,false
+05_high_spending-9-entertainment,2026-09-08,DEMO - entertainment,4200.00,expense,entertainment,false
+05_high_spending-9-subscriptions,2026-09-09,DEMO - subscriptions,1400.00,expense,subscriptions,true
+05_high_spending-9-healthcare,2026-09-10,DEMO - healthcare,2800.00,expense,healthcare,false
+05_high_spending-9-insurance,2026-09-11,DEMO - insurance,5600.00,expense,insurance,true
