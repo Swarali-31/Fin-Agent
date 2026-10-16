@@ -451,7 +451,15 @@ def _default_adapters(settings: Settings | None = None) -> dict[str, AgentAdapte
 async def _get_proposed_plan(llm: Any, state: WorkflowState) -> ProposedPlan:
     structured = llm.with_structured_output(ProposedPlan)
     response = await _maybe_await(structured.ainvoke(plan_prompt(state.task, state.context)))
-    return response if isinstance(response, ProposedPlan) else ProposedPlan.model_validate(response)
+    proposal = response if isinstance(response, ProposedPlan) else ProposedPlan.model_validate(response)
+    # Literal questions are a model formatting error, never an executable path.
+    # Bind them to the actual user task, then run every existing plan validator.
+    for step in proposal.steps:
+        if step.agent == "financial_research":
+            reference = step.input_refs.get("question", "")
+            if reference and reference != "task" and not reference.startswith(("context.", "result.")):
+                step.input_refs["question"] = "task"
+    return proposal
 
 
 async def _run_step(step: PlanStep, state: WorkflowState, runtime: _Runtime) -> None:

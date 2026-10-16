@@ -523,3 +523,12 @@ def test_planner_prompt_names_exact_specialist_input_contracts():
     assert "expense_analysis" in contract["budget_planning"]
     assert contract["financial_research"] == {"question":"task"}
     assert {"expense_analysis","budget","research"} == set(contract["financial_report"])
+
+
+@_async_test
+async def test_literal_research_question_is_bound_to_user_task_then_validated():
+    registry=adapters()
+    result=await run_workflow("Explain SIP investing", adapters=registry,
+        llm=FakeLLM({"steps":[{"id":"research_1","agent":"financial_research","input_refs":{"question":"Explain SIP investing"}}]}))
+    assert result.status=="success"
+    assert registry["financial_research"].calls[0]["input"]["question"]=="Explain SIP investing"

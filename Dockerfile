@@ -7,6 +7,7 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
+ENV LLM_FALLBACK_MODEL=gemini-3.6-flash
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 COPY pyproject.toml README.md ./
 COPY src ./src

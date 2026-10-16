@@ -29,6 +29,7 @@ class RawSearchResult:
     url: str
     content: str
     published_date: date | str | None = None
+    score: float | None = None
 
 
 @runtime_checkable
@@ -77,7 +78,8 @@ class TavilySearchProvider:
                 max_results=max_results,
                 include_domains=list(include_domains) if include_domains else None,
                 timeout=self._timeout_seconds,
-                topic="finance",
+                topic="general",
+                search_depth="advanced",
             )
             if not isinstance(response, dict) or not isinstance(response.get("results"), list):
                 raise SearchError("The search provider returned an unreadable response. Try again later.")
@@ -94,6 +96,7 @@ class TavilySearchProvider:
                         url=str(item.get("url") or ""),
                         content=str(item.get("content") or ""),
                         published_date=published_date,
+                        score=float(item["score"]) if isinstance(item.get("score"), (int, float)) else None,
                     )
                 )
             return results

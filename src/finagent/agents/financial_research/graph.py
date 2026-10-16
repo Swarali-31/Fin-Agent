@@ -25,7 +25,6 @@ from finagent.agents.financial_research.search import (
     get_search_provider,
 )
 from finagent.agents.financial_research.source_ranking import (
-    count_credible_results,
     official_domain_list,
     rank_and_dedupe_sources,
 )
@@ -52,10 +51,6 @@ _PRESCRIPTIVE_RE = re.compile(
     r"sell\s+(?:shares?\s+of\s+)?|hold\s+(?:shares?\s+of\s+)?|"
     r"invest\s+(?:in|into)\s+[A-Z][A-Za-z0-9.&-]*)\b",
     re.IGNORECASE,
-)
-_EDUCATIONAL_ADVICE_QUERY = (
-    "General educational factors to consider when evaluating investments, "
-    "including diversification, risk, and due diligence"
 )
 _DISCLAIMER = (
     "Educational information only; not personalized financial advice. "
@@ -207,7 +202,7 @@ def build_research_graph(
             queries = [request.question]
 
         if advice_request:
-            queries = [_EDUCATIONAL_ADVICE_QUERY]
+            queries = ["General educational factors and risks relevant to: " + request.question]
         return {
             "parsed_request": request,
             "queries": queries[:3],
@@ -260,13 +255,11 @@ def build_research_graph(
         }
 
     def route_after_official(state: _ResearchState) -> str:
-        if state.get("configuration_error") or state.get("search_failures"):
+        if state.get("configuration_error"):
             return "assemble"
-        official_count = count_credible_results(
-            state.get("results", []),
-            state.get("official_domains", []),
-        )
-        return "search_general" if official_count < 2 else "rank_and_dedupe"
+        if state.get("search_failures"):
+            return "rank_and_dedupe" if state.get("results") else "assemble"
+        return "search_general"
 
     def search_general(state: _ResearchState) -> dict[str, Any]:
         try:
@@ -296,7 +289,7 @@ def build_research_graph(
         }
 
     def route_after_general(state: _ResearchState) -> str:
-        if state.get("configuration_error") or state.get("search_failures"):
+        if state.get("configuration_error") or (state.get("search_failures") and not state.get("results")):
             return "assemble"
         return "rank_and_dedupe"
 
@@ -446,7 +439,7 @@ def build_research_graph(
             limitations.append(
                 Limitation(
                     code="search_incomplete",
-                    message="Synthesis was skipped because one or more search queries failed.",
+                    message="Some searches failed. The answer uses only the sources that were retrieved.",
                 )
             )
         sources = state.get("sources", [])
@@ -493,7 +486,7 @@ def build_research_graph(
             "result": ResearchResult(
                 status=status,
                 question=request.question,
-                findings=findings if not failures else [],
+                findings=findings,
                 sources=sources,
                 search_provider=state.get("provider_name"),
                 errors=errors,

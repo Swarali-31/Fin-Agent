@@ -156,7 +156,7 @@ def test_search_failure_retries_and_returns_structured_failure(
     assert not result.findings
 
 
-def test_partial_search_failure_keeps_sources_but_skips_synthesis(
+def test_partial_search_failure_answers_from_successfully_retrieved_sources(
     research_request: ResearchRequest,
     settings_with_synthetic_official_domain: Settings,
     synthetic_search_provider: Any,
@@ -177,7 +177,7 @@ def test_partial_search_failure_keeps_sources_but_skips_synthesis(
     assert result.status == AgentStatus.partial
     assert result.errors[0].code == "search_failed"
     assert result.sources
-    assert result.findings == []
+    assert result.findings
     assert any(item.code == "search_incomplete" for item in result.limitations)
 
 
@@ -327,3 +327,13 @@ def test_research_language_selection_is_passed_to_grounded_prompt():
     assert "source titles and URLs unchanged" in conversational_question(request)
     auto = ResearchRequest(question="बजट क्या है?")
     assert "language of the current user question" in conversational_question(auto)
+
+
+def test_relevant_source_precedes_unrelated_official_result():
+    from finagent.agents.financial_research.search import RawSearchResult
+    from finagent.agents.financial_research.source_ranking import rank_and_dedupe_sources
+    sources=rank_and_dedupe_sources([
+        RawSearchResult(title="Unrelated official page",url="https://rbi.org.in/unrelated",content="TEST FIXTURE",score=0.1),
+        RawSearchResult(title="Relevant SIP guide",url="https://example.invalid/sip",content="TEST FIXTURE",score=0.95),
+    ],official_domains=["rbi.org.in"],max_sources=1)
+    assert sources[0].title=="Relevant SIP guide"

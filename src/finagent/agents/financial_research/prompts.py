@@ -39,10 +39,17 @@ class ResearchSynthesis(BaseModel):
 QUERY_SYSTEM_PROMPT = """Plan financial-education research only. Return one to three
 concise search queries and indicate whether the user's request asks for individualized
 financial advice (for example, which specific stock to buy). Queries must seek general
-educational material, not personalized recommendations. Do not answer the question."""
+educational material, not personalized recommendations. Preserve the exact topic and
+country. General questions about SIPs, budgeting or emergency funds are not requests
+for a specific security recommendation. If this is a multi-agent goal, search only its
+financial research topic, ignoring instructions to analyze transactions or generate reports.
+Do not answer the question."""
 
 SYNTHESIS_SYSTEM_PROMPT = """Write concise financial EDUCATION using only the supplied
-retrieved sources. Use short sentences and everyday words; explain unfamiliar terms. Return findings with statement, source_ids, and confidence
+retrieved sources. Answer the current question directly, covering its requested steps,
+examples and distinctions when evidence supports them. Prefer relevant evidence over
+unrelated official pages. Do not introduce investing topics the user did not ask about.
+Use short sentences and everyday words; explain unfamiliar terms. Return findings with statement, source_ids, and confidence
 (low/medium/high), plus any limitations. Every finding must cite one or more source IDs
 from the supplied list. Never provide personalized investment advice, tell the user to
 buy, sell, or hold a security, or recommend a specific security. When the question seeks

@@ -137,3 +137,9 @@
 - Applied green and warm-neutral colors across the application. Added Render Free Docker blueprint using the existing Supabase database; secrets remain private environment settings.
 - Verification: full Python150 passed/2 skipped, frontend32 passed and production build passed. Source secret-pattern scan found no matching keys; backend/.env is ignored. Docker image build cannot be run locally because the Docker daemon is stopped.
 - Owner approved committing/pushing codex/finagent-deploy and copying provider/database credentials into Render private environment settings. Source committed locally; remote push currently awaits GitHub authentication. Render account is verified; Free Docker service setup is prepared in Singapore. No cloud service has been deployed yet.
+
+### Deployed Master Agent and Research reliability repair
+- Traced a persisted Master failure to a literal research question in input_refs. Bind that formatting error to the actual user task before applying all existing plan/dependency validators; unknown agents remain rejected.
+- Added optional Google model failover for temporary provider errors, with real sync/async structured calls and no invented successful output. Docker enables gemini-3.6-flash as secondary to configured primary; authentication failures still propagate.
+- Research retains the actual topic when reframing advice, uses advanced general-topic Tavily searches beyond regulator-only pages, ranks provider relevance before official-domain ties, and can cite successfully retrieved sources even when another query fails.
+- Live SIP test returned three cited findings covering definition, setup steps and market risks. Backend153 passed/2 skipped; frontend32 passed and production build passed. Deployment update pending.

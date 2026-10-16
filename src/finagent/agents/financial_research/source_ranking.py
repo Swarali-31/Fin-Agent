@@ -84,7 +84,7 @@ def rank_and_dedupe_sources(
     official_domains: list[str],
     max_sources: int,
 ) -> list[SourceMetadata]:
-    """Keep first result per URL and assign stable source IDs with official first."""
+    """Keep first result per URL; rank by provider relevance, with official ties first."""
     ranked: list[tuple[bool, int, str, str, RawSearchResult]] = []
     seen: set[str] = set()
     domains = [domain.strip().lower().lstrip(".") for domain in official_domains]
@@ -109,7 +109,7 @@ def rank_and_dedupe_sources(
             )
         )
 
-    ranked.sort(key=lambda item: (not item[0], item[1], item[2]))
+    ranked.sort(key=lambda item: (-(getattr(item[4], "score", None) or 0), not item[0], item[1], item[2]))
     retrieved_at = datetime.now(UTC)
     sources: list[SourceMetadata] = []
     for index, (is_official, _, _, source_url, result) in enumerate(

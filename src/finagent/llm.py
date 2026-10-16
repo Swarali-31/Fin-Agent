@@ -76,4 +76,41 @@ def get_llm(settings: Settings | None = None, **kwargs: Any) -> BaseChatModel:
     elif provider.lower() in ("google", "google_genai"):
         init_kwargs["google_api_key"] = api_key
 
-    return init_chat_model(**init_kwargs)
+    primary = init_chat_model(**init_kwargs)
+    fallback_name = cfg.llm_fallback_model
+    if provider == "google_genai" and fallback_name and fallback_name != model:
+        return _ResilientModel(primary, lambda: init_chat_model(**{**init_kwargs, "model": fallback_name, "max_retries": 0}))
+    return primary
+
+
+class _ResilientModel:
+    """Use a real secondary model only for transient provider failures."""
+
+    def __init__(self, primary, fallback_factory):
+        self.primary = primary
+        self.fallback_factory = fallback_factory
+
+    @staticmethod
+    def transient(error):
+        code = getattr(error, "status_code", None) or getattr(error, "code", None)
+        return isinstance(error, TimeoutError) or str(code) in {"429", "500", "502", "503", "504"}
+
+    def with_structured_output(self, schema, **kwargs):
+        return _ResilientModel(self.primary.with_structured_output(schema, **kwargs),
+                               lambda: self.fallback_factory().with_structured_output(schema, **kwargs))
+
+    def invoke(self, *args, **kwargs):
+        try:
+            return self.primary.invoke(*args, **kwargs)
+        except Exception as error:
+            if not self.transient(error):
+                raise
+            return self.fallback_factory().invoke(*args, **kwargs)
+
+    async def ainvoke(self, *args, **kwargs):
+        try:
+            return await self.primary.ainvoke(*args, **kwargs)
+        except Exception as error:
+            if not self.transient(error):
+                raise
+            return await self.fallback_factory().ainvoke(*args, **kwargs)
