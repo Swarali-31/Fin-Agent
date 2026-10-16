@@ -15,8 +15,9 @@ from finagent.schemas.financial import FinancialProfile, Transaction
 from finagent.schemas.report import FinancialReport
 from finagent.schemas.research import ResearchResult
 from pydantic import BaseModel
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import event, func, select
+from sqlalchemy.orm import Session, sessionmaker, with_loader_criteria
+from sqlalchemy.exc import IntegrityError
 
 from backend.app.config.settings import Settings, get_settings
 from backend.app.db.models import (
@@ -57,6 +58,48 @@ class PostgresRepository:
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._sessions = session_factory
+
+    def for_user(self, user_id: str) -> PostgresRepository:
+        """Every read, including detail/count queries, is scoped at the ORM boundary."""
+        factory = sessionmaker(bind=self._sessions.kw["bind"], expire_on_commit=False)
+
+        @event.listens_for(factory, "do_orm_execute")
+        def restrict(execute_state: Any) -> None:
+            if not execute_state.is_select:
+                return
+            owned_profiles = select(ProfileRecord.profile_id).where(ProfileRecord.user_id == user_id)
+            owned_workflows = select(WorkflowRunRecord.id).where(WorkflowRunRecord.user_id == user_id)
+            statement = execute_state.statement
+            for model in (ProfileRecord, ResearchRunRecord, WorkflowRunRecord):
+                statement = statement.options(with_loader_criteria(model, model.user_id == user_id))
+            for model in (TransactionRecord, ExpenseAnalysisRecord, BudgetRecord, ReportRecord):
+                statement = statement.options(with_loader_criteria(model, model.profile_id.in_(owned_profiles)))
+            statement = statement.options(with_loader_criteria(TraceEventRecord, TraceEventRecord.workflow_run_id.in_(owned_workflows)))
+            execute_state.statement = statement
+
+        @event.listens_for(factory, "before_flush")
+        def assign_owner(session: Session, *_args: Any) -> None:
+            for record in session.new:
+                if isinstance(record, (ProfileRecord, ResearchRunRecord, WorkflowRunRecord)):
+                    record.user_id = user_id
+
+        return PostgresRepository(factory)
+
+    def create_profile(self, profile_id: str, currency: str) -> None:
+        with self._sessions.begin() as session:
+            if session.get(ProfileRecord, profile_id) is not None:
+                raise ValueError("Profile already exists.")
+            session.add(ProfileRecord(
+                profile_id=profile_id, currency=currency,
+                profile_json={"profile_id": profile_id, "currency": currency, "transactions": []},
+                is_sample=False,
+            ))
+
+    def list_profiles(self) -> list[dict[str, Any]]:
+        with self._sessions() as session:
+            return [{"profile_id": row.profile_id, "currency": row.currency,
+                     "is_sample": row.is_sample}
+                    for row in session.scalars(select(ProfileRecord).order_by(ProfileRecord.profile_id))]
 
     def save_profile(self, profile: FinancialProfile, *, is_sample: bool = False) -> str:
         payload = _payload(profile)
@@ -154,8 +197,26 @@ class PostgresRepository:
                     "is_sample": row.is_sample,
                     "transaction": row.transaction_json,
                 }
-                for row in rows
+                for row in rows if not row.transaction_json.get("_finagent_deleted", False)
             ]
+
+    def set_transactions_deleted(self, profile_id: str, transaction_ids: list[str], deleted: bool) -> int:
+        # Soft deletion keeps an undo path and preserves historical reports.
+        with self._sessions.begin() as session:
+            rows = session.scalars(select(TransactionRecord).where(
+                TransactionRecord.profile_id == profile_id,
+                TransactionRecord.transaction_id.in_(transaction_ids),
+            )).all()
+            if len(rows) != len(set(transaction_ids)):
+                raise KeyError("A selected transaction was not found.")
+            for row in rows:
+                payload = dict(row.transaction_json)
+                if deleted:
+                    payload["_finagent_deleted"] = True
+                else:
+                    payload.pop("_finagent_deleted", None)
+                row.transaction_json = payload
+            return len(rows)
 
     def save_expense_analysis(
         self,
@@ -185,22 +246,35 @@ class PostgresRepository:
         revision_info = payload.get("revision_info") or {}
         parent_budget_id = revision_info.get("parent_budget_id") or None
         row_id = str(uuid4())
-        with self._sessions.begin() as session:
-            session.add(
-                BudgetRecord(
-                    id=row_id,
-                    profile_id=profile_id,
-                    budget_id=result.budget_id,
-                    parent_budget_id=parent_budget_id,
-                    revision=result.revision,
-                    status=_status(result.status),
-                    source_analysis_version=result.source_analysis_version,
-                    currency=result.currency,
-                    monthly_income=result.monthly_income.amount,
-                    planned_monthly_savings=result.planned_monthly_savings.amount,
-                    result_json=payload,
+        # Budget IDs describe immutable content. Repeating the same plan reuses
+        # its saved record, including when concurrent runs race to insert it.
+        with self._sessions() as session:
+            existing = session.scalar(select(BudgetRecord).where(BudgetRecord.budget_id == result.budget_id, BudgetRecord.profile_id == profile_id)) if result.budget_id else None
+            if existing is not None:
+                return existing.id
+        try:
+            with self._sessions.begin() as session:
+                session.add(
+                    BudgetRecord(
+                        id=row_id,
+                        profile_id=profile_id,
+                        budget_id=result.budget_id,
+                        parent_budget_id=parent_budget_id,
+                        revision=result.revision,
+                        status=_status(result.status),
+                        source_analysis_version=result.source_analysis_version,
+                        currency=result.currency,
+                        monthly_income=result.monthly_income.amount,
+                        planned_monthly_savings=result.planned_monthly_savings.amount,
+                        result_json=payload,
+                    )
                 )
-            )
+        except IntegrityError:
+            with self._sessions() as session:
+                existing = session.scalar(select(BudgetRecord).where(BudgetRecord.budget_id == result.budget_id, BudgetRecord.profile_id == profile_id)) if result.budget_id else None
+                if existing is None:
+                    raise
+                return existing.id
         return row_id
 
     def list_budget_revisions(self, budget_id: str) -> list[dict[str, Any]]:
@@ -603,6 +677,6 @@ def get_repository(settings: Settings | None = None) -> Repository:
         database_url = "postgresql+psycopg://" + database_url.removeprefix("postgres://")
     elif database_url.startswith("postgresql://"):
         database_url = "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
-    if not database_url.startswith("postgresql+psycopg://"):
-        raise ValueError("DATABASE_URL must use PostgreSQL (postgresql:// or postgresql+psycopg://).")
+    if not database_url.startswith(("postgresql+psycopg://", "sqlite:///")):
+        raise ValueError("DATABASE_URL must use PostgreSQL or a persistent sqlite:/// file.")
     return _postgres_repository_for_url(database_url)

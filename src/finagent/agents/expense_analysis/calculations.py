@@ -210,6 +210,8 @@ def find_data_gaps(profile: FinancialProfile) -> list[DataGap]:
     has_income = any(transaction.type == TransactionType.income for transaction in profile.transactions)
 
     for transaction in profile.transactions:
+        if transaction.type == TransactionType.transfer:
+            continue
         if transaction.type == TransactionType.expense and transaction.category is None:
             gaps.append(
                 DataGap(
@@ -218,7 +220,7 @@ def find_data_gaps(profile: FinancialProfile) -> list[DataGap]:
                     question="What spending category best describes this expense?",
                 )
             )
-        if transaction.is_recurring is None:
+        if transaction.type == TransactionType.expense and transaction.is_recurring is None:
             gaps.append(
                 DataGap(
                     transaction_id=transaction.id,
@@ -259,15 +261,19 @@ def find_data_gaps(profile: FinancialProfile) -> list[DataGap]:
 
 def compute_expense_metrics(profile: FinancialProfile) -> ExpenseMetrics:
     """Compute summary, recurrence, unusual activity, gaps, and profile version."""
-    months = sorted({_month(transaction) for transaction in profile.transactions})
-    month_count = len(months)
+    active = [transaction for transaction in profile.transactions if transaction.type != TransactionType.transfer]
+    if not active:
+        raise ValueError("Add an income, expense or refund. Transfers alone cannot be analyzed.")
+    first, last = min(transaction.date for transaction in active), max(transaction.date for transaction in active)
+    month_count = (last.year-first.year)*12 + last.month-first.month + 1
+    months = [f"{(first.year*12+first.month-1+offset)//12:04}-{(first.year*12+first.month-1+offset)%12+1:02}" for offset in range(month_count)]
     income_total = Decimal("0")
     category_totals: dict[ExpenseCategory, Decimal] = defaultdict(lambda: Decimal("0"))
 
     for transaction in profile.transactions:
-        if transaction.type == TransactionType.income:
+        if transaction.type in {TransactionType.income, TransactionType.refund}:
             income_total += transaction.amount.amount
-        else:
+        elif transaction.type == TransactionType.expense:
             # Keep uncategorized spending in the summary while separately flagging its source data gap.
             category_totals[transaction.category or ExpenseCategory.other] += transaction.amount.amount
 
@@ -289,9 +295,21 @@ def compute_expense_metrics(profile: FinancialProfile) -> ExpenseMetrics:
         monthly_expenses=Money(amount=monthly_expenses),
         available_surplus=SignedMoney(amount=available_surplus),
         category_totals=rounded_categories,
+        received_total=Money(amount=income_total),
+        spent_total=Money(amount=sum(category_totals.values(), Decimal("0"))),
+        refund_total=Money(amount=sum((t.amount.amount for t in active if t.type == TransactionType.refund), Decimal("0"))),
+        transaction_count=len(profile.transactions),
+        monthly_breakdown=[{
+            "month": month,
+            "received": str(sum((t.amount.amount for t in active if _month(t)==month and t.type in {TransactionType.income,TransactionType.refund}), Decimal("0")).quantize(_CENT)),
+            "spent": str(sum((t.amount.amount for t in active if _month(t)==month and t.type==TransactionType.expense), Decimal("0")).quantize(_CENT)),
+        } for month in months],
     )
     return ExpenseMetrics(
-        analysis_version=compute_version("ea", {"profile": profile.model_dump(mode="json")}),
+        analysis_version=compute_version("ea", {"calculation_version": "cashflow-v2", "profile": {
+            **profile.model_dump(mode="json"),
+            "transactions": [t.model_dump(mode="json") for t in sorted(profile.transactions, key=lambda t: (t.date, t.id))],
+        }}),
         summary=summary,
         recurring_expenses=detect_recurring(profile),
         unusual_transactions=_detect_unusual(profile),

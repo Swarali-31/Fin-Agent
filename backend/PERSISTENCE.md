@@ -17,8 +17,7 @@ DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/DATABASE
 No connection is opened and no schema is created during FastAPI startup. When
 `DATABASE_URL` is absent, application startup and health checks remain
 available; calling `get_repository()` raises
-`PersistenceNotConfigured` (`code="persistence_not_configured"`). API error
-mapping to HTTP 503 is intentionally left for the future API layer.
+`PersistenceNotConfigured` (`code="persistence_not_configured"`). The API maps missing persistence to HTTP 503.
 
 Install the root package's persistence extra from the repository root:
 
@@ -33,8 +32,7 @@ The initial PostgreSQL schema is
 explicitly to the intended database using a PostgreSQL SQL client, for example:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f backend/migrations/001_initial_persistence.sql
+PYTHONPATH=src .venv/bin/python -m backend.app.db.migrate
 ```
 
 Do not run this against a remote database without explicit authorization and
@@ -53,3 +51,5 @@ profiles and transactions and defaults to false.
 `list_budget_revisions(budget_id)` resolves the parent chain and returns the
 root plan and its descendants in revision order. Research source metadata is
 stored in `research_runs.sources_json` as well as in the complete result JSON.
+
+The migration command accepts `postgres://`, `postgresql://`, and `postgresql+psycopg://` URLs, tracks applied filenames, and applies pending SQL in one transaction. For a database already initialized manually with the original SQL, do not rerun the initial migration; use the existing schema.

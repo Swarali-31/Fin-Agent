@@ -15,6 +15,7 @@ from finagent.agents.financial_research.prompts import (
     QueryPlan,
     ResearchSynthesis,
     query_planning_prompt,
+    conversational_question,
     synthesis_prompt,
 )
 from finagent.agents.financial_research.search import (
@@ -139,10 +140,14 @@ def _search_queries(
                 raise
             except Exception as exc:
                 last_error = exc
+                if not getattr(exc, "retryable", True):
+                    break
                 if attempt == 0:
                     continue
         if last_error is not None:
-            failures.append(f"{query}: {last_error}")
+            failures.append(str(last_error) if type(last_error).__name__ == "SearchError" else "Search could not finish. Please try again; no sources were invented.")
+            if not getattr(last_error, "retryable", True):
+                break
     return results, success_count, failures
 
 
@@ -189,7 +194,7 @@ def build_research_graph(
                 [
                     SystemMessage(content=QUERY_SYSTEM_PROMPT),
                     HumanMessage(
-                        content=query_planning_prompt(request.question, request.jurisdiction)
+                        content=query_planning_prompt(conversational_question(request), request.jurisdiction)
                     ),
                 ]
             )
@@ -320,7 +325,7 @@ def build_research_graph(
                     SystemMessage(content=SYNTHESIS_SYSTEM_PROMPT),
                     HumanMessage(
                         content=synthesis_prompt(
-                            request.question,
+                            conversational_question(request),
                             [
                                 {
                                     "source_id": source.source_id,
@@ -342,7 +347,7 @@ def build_research_graph(
                 + [
                     Limitation(
                         code="synthesis_unavailable",
-                        message="Evidence was retrieved, but structured synthesis was unavailable.",
+                        message="We found sources, but could not write an AI summary. Please try again later.",
                     )
                 ]
             }
@@ -463,7 +468,7 @@ def build_research_graph(
             limitations.append(
                 Limitation(
                     code="no_findings",
-                    message="No evidence-backed findings were available for this question.",
+                    message="No supported answer was found for this question. Try asking something more specific.",
                 )
             )
         if state.get("advice_request") and not any(

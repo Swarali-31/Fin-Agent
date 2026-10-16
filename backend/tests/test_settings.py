@@ -35,3 +35,14 @@ def test_environment_values_are_parsed_without_a_json_array(monkeypatch) -> None
         "https://ui.example.invalid",
     ]
     assert settings.official_domains == ["rbi.org.in", "sebi.gov.in"]
+
+
+def test_json_array_origins_are_supported() -> None:
+    settings = Settings(_env_file=None, CORS_ORIGINS='["http://127.0.0.1:5173"]')
+    assert settings.cors_origins == ["http://127.0.0.1:5173"]
+
+
+def test_supabase_password_is_encoded_backend_only() -> None:
+    settings = Settings(_env_file=None, SUPABASE_DB_HOST="pooler.example.invalid", SUPABASE_DB_USER="postgres.test", SUPABASE_DB_PASSWORD="test@fixture:#")
+    assert "test%40fixture%3A%23" in settings.database_url
+    assert "supabase_db_password" not in settings.model_dump()

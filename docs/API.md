@@ -56,3 +56,13 @@ host application. Configure CORS through `CORS_ORIGINS`; the default is
 Markdown download is rendered from the report's stored summary, qualitative
 sections, and research findings. PDF is not offered because no PDF renderer is
 installed or configured.
+
+## Stored profile integration
+
+- `POST /profiles` with `{ "profile_id": "my-profile", "currency": "INR" }` creates an empty profile (201); duplicate IDs return 409.
+- `GET /profiles` lists profile IDs, currencies and sample flags.
+- `GET /profiles/{profile_id}/transactions` returns saved native transactions.
+- `POST /agents/expense-analysis/run` also accepts `{ "profile_id": "my-profile" }` to analyze stored transactions.
+- `POST /workflows` accepts `{ "task": "Generate a financial report", "context": { "profile_id": "my-profile" } }`. Stored data overrides browser transaction/upstream snapshots; missing financial inputs are rejected by the existing planner. Valid specialist outputs are saved to the shared histories; profile changes during execution fail the run as stale.
+- Budget/report endpoints with `?profile_id=...` resolve current persisted upstream inputs and reject stale snapshots (409).
+- Research run accepts optional `?profile_id=...` for profile-linked history; omission continues to support profile-free research.

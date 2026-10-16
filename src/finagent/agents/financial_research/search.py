@@ -12,6 +12,10 @@ from finagent.config import Settings, get_settings
 class SearchError(RuntimeError):
     """A configured search provider failed while executing a query."""
 
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
+
 
 class ConfigurationError(RuntimeError):
     """Search provider configuration is missing or unsupported."""
@@ -75,8 +79,12 @@ class TavilySearchProvider:
                 timeout=self._timeout_seconds,
                 topic="finance",
             )
+            if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+                raise SearchError("The search provider returned an unreadable response. Try again later.")
             results: list[RawSearchResult] = []
             for item in response.get("results", []):
+                if not isinstance(item, dict):
+                    raise SearchError("The search provider returned an unreadable source.")
                 published_date = item.get("published_date")
                 if not isinstance(published_date, (str, date)):
                     published_date = None
@@ -89,10 +97,14 @@ class TavilySearchProvider:
                     )
                 )
             return results
-        except ConfigurationError:
+        except (ConfigurationError, SearchError):
             raise
         except Exception as exc:
-            raise SearchError(f"Tavily search failed: {exc}") from exc
+            status = str(getattr(exc, "status_code", ""))
+            message = {"429": "Search request limit reached. Try again later or check your search account quota.", "401": "The search provider rejected the backend API key.", "403": "The search account cannot access this service."}.get(status, "The search provider could not complete this request. Check the connection and try again.")
+            if "timeout" in type(exc).__name__.lower():
+                message = "The search timed out. Try a shorter question or try again later."
+            raise SearchError(message, retryable=status not in {"401", "403", "429"}) from exc
 
 
 def get_search_provider(settings: Settings | None = None) -> SearchProvider:

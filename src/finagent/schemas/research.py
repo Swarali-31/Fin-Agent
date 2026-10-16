@@ -10,10 +10,18 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from finagent.schemas.common import AgentName, AgentResultBase, SourceTier
 
 
+class ResearchMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=6000)
+
+
 class ResearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str
+    conversation: list[ResearchMessage] = Field(default_factory=list, max_length=12)
+    response_language: str = Field(default="auto", min_length=2, max_length=64)
     jurisdiction: str = "IN"
     max_sources: int = Field(default=5, ge=1, le=10)
     preferred_domains: list[str] | None = None

@@ -306,3 +306,24 @@ def test_configuration_error_is_not_retried(
 
     assert result.status == AgentStatus.failed
     assert result.errors[0].code == "search_not_configured"
+
+
+def test_followup_context_is_labelled_as_context_not_evidence():
+    from finagent.agents.financial_research.prompts import conversational_question
+    request = ResearchRequest(question="Where should I keep it?", conversation=[
+        {"role":"user", "content":"What is an emergency fund?"},
+        {"role":"assistant", "content":"It is money for unexpected expenses."},
+    ])
+    prompt = conversational_question(request)
+    assert "emergency fund" in prompt
+    assert "Current user question: Where should I keep it?" in prompt
+    assert "previous answers are not evidence" in prompt
+
+
+def test_research_language_selection_is_passed_to_grounded_prompt():
+    from finagent.agents.financial_research.prompts import conversational_question
+    request = ResearchRequest(question="What is a budget?", response_language="Marathi")
+    assert "requested language: Marathi" in conversational_question(request)
+    assert "source titles and URLs unchanged" in conversational_question(request)
+    auto = ResearchRequest(question="बजट क्या है?")
+    assert "language of the current user question" in conversational_question(auto)

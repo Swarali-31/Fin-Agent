@@ -22,6 +22,7 @@ export async function request(path, options = {}) {
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
+      credentials: "include",
       headers,
       body:
         options.body !== undefined && typeof options.body !== "string"
@@ -35,6 +36,8 @@ export async function request(path, options = {}) {
       request_id: null,
     });
   }
+
+  if (response.ok && options.responseType === "blob") return response.blob();
 
   let envelope;
   try {
@@ -64,6 +67,9 @@ export async function request(path, options = {}) {
 
   if (!response.ok || envelope.status === "error") {
     const error = envelope.error || {};
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      window.dispatchEvent(new Event("finagent:session-expired"));
+    }
     throw new ApiError({
       code: error.code || `http_${response.status}`,
       message: error.message || response.statusText || "The request failed.",

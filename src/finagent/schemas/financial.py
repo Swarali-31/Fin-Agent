@@ -90,7 +90,7 @@ class FinancialProfile(BaseModel):
 
 
 class FinancialSummary(BaseModel):
-    """Monthly averages over a period (all amounts are per-month averages)."""
+    """Monthly averages plus explicitly named whole-period cash-flow totals."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +102,13 @@ class FinancialSummary(BaseModel):
     monthly_expenses: Money
     available_surplus: SignedMoney
     category_totals: dict[ExpenseCategory, Money]
+    # Cash received includes refunds, which are also identified separately.
+    # Transfers between owned accounts never count as income or spending.
+    received_total: Money | None = None
+    spent_total: Money | None = None
+    refund_total: Money | None = None
+    transaction_count: int | None = Field(default=None, ge=0)
+    monthly_breakdown: list[dict[str, str]] = Field(default_factory=list)
 
     @field_validator("currency")
     @classmethod

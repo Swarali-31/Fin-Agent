@@ -70,6 +70,7 @@ function setupReports() {
 beforeEach(() => {
   localStorage.clear();
   vi.resetAllMocks();
+  listResearch.mockResolvedValue({ items: [] });
 });
 
 afterEach(cleanup);
@@ -82,10 +83,10 @@ describe("Financial Research page", () => {
       status: 503,
     }));
     renderPage(<FinancialResearch />);
-    fireEvent.change(screen.getByLabelText("Research question"), {
+    fireEvent.change(screen.getByLabelText("What would you like to learn about money?"), {
       target: { value: "TEST FIXTURE: educational question" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Run research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("Search not configured")).toBeTruthy();
     expect(screen.getByText(/TAVILY_API_KEY/)).toBeTruthy();
@@ -109,14 +110,12 @@ describe("Financial Research page", () => {
       },
     });
     renderPage(<FinancialResearch />);
-    fireEvent.change(screen.getByLabelText("Research question"), {
+    fireEvent.change(screen.getByLabelText("What would you like to learn about money?"), {
       target: { value: "TEST FIXTURE: educational question" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Run research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("TEST FIXTURE: cited statement")).toBeTruthy();
-    expect(screen.getByText("cited finding")).toBeTruthy();
-    expect(screen.getByText("Confidence: high")).toBeTruthy();
     const sourceLink = screen.getAllByRole("link", { name: sourceFixture.url })[0];
     expect(sourceLink.getAttribute("rel")).toBe("noopener noreferrer");
     expect(screen.getAllByText(/TEST FIXTURE: synthetic publisher/).length).toBeGreaterThan(0);
@@ -234,4 +233,21 @@ describe("Reports page", () => {
     expect(await screen.findByText("TEST FIXTURE: valid summary")).toBeTruthy();
     expect(screen.getByText("valid")).toBeTruthy();
   });
+});
+
+it("sends follow-up context and clears it for a new chat", async () => {
+  runFinancialResearch.mockResolvedValue({status:"success",result:{status:"success",findings:[{statement:"TEST FIXTURE answer",source_ids:[]}],sources:[]}});
+  renderPage(<FinancialResearch />);
+  const input = screen.getByLabelText("What would you like to learn about money?");
+  fireEvent.change(input,{target:{value:"What is an emergency fund?"}});
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  await screen.findByText("TEST FIXTURE answer");
+  fireEvent.change(input,{target:{value:"Where should I keep it?"}});
+  fireEvent.click(screen.getByRole("button",{name:"Send"}));
+  expect(runFinancialResearch.mock.calls[1][0].conversation).toEqual([{role:"user",content:"What is an emergency fund?"},{role:"assistant",content:"TEST FIXTURE answer"}]);
+  await screen.findAllByText("TEST FIXTURE answer");
+  // Wait for completion before starting the next conversation.
+  await screen.findByRole("button",{name:"Send"});
+  fireEvent.click(screen.getByRole("button",{name:"New chat"}));
+  expect(screen.queryByText("Where should I keep it?")).toBeNull();
 });

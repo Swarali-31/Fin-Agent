@@ -21,13 +21,15 @@ import { listBudgets } from "../services/budgets.js";
 import { ApiError } from "../services/api.js";
 import {
   createSampleData,
+  createProfile,
+  listProfiles,
   getProfileSummary,
 } from "../services/profiles.js";
 import { listWorkflows } from "../services/workflows.js";
 
 const PROFILE_STORAGE_KEY = "finagent.profileId";
 const SAMPLE_PROFILE_STORAGE_KEY = "finagent.sampleProfileId";
-const CATEGORY_COLORS = ["#072F5F", "#059669", "#60A5FA", "#34D399", "#94A3B8", "#F59E0B"];
+const CATEGORY_COLORS = ["#072F5F", "#059669", "#b0c68a", "#d2dfb4", "#94a3b8", "#c9aa68"];
 const PAGE_LINKS = [
   ["Dashboard", "/dashboard"],
   ["Master Agent", "/master-agent"],
@@ -99,6 +101,8 @@ export default function Dashboard() {
     readStoredValue(SAMPLE_PROFILE_STORAGE_KEY),
   );
   const [refreshKey, setRefreshKey] = useState(0);
+  const [profiles, setProfiles] = useState([]);
+  const [newCurrency, setNewCurrency] = useState("INR");
   const [sampleLoading, setSampleLoading] = useState(false);
   const [sampleError, setSampleError] = useState("");
   const [data, setData] = useState({
@@ -114,6 +118,7 @@ export default function Dashboard() {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      try { const items = await listProfiles(); if (!cancelled) setProfiles(items ?? []); } catch { /* Existing error panels show persistence failures. */ }
       const [agentsResult, workflowsResult] = await Promise.allSettled([
         listAgents(),
         listWorkflows({ page: 1, page_size: 5 }),
@@ -164,7 +169,7 @@ export default function Dashboard() {
       })),
     [summary],
   );
-  const sampleIsActive = Boolean(profileId && profileId === sampleProfileId);
+  const sampleIsActive = Boolean(profiles.find((profile) => profile.profile_id === profileId)?.is_sample ?? (profileId && profileId === sampleProfileId));
   const workflows = workflowRows(data.workflows);
   const agents = agentEntries(data.agents);
   const unavailableAgents = agents.filter(([, agent]) =>
@@ -178,6 +183,17 @@ export default function Dashboard() {
     if (!selectedId) return;
     writeStoredValue(PROFILE_STORAGE_KEY, selectedId);
     setProfileId(selectedId);
+  }
+
+  async function handleCreateProfile() {
+    if (!profileInput.trim()) return;
+    setSampleError("");
+    try {
+      const result = await createProfile(profileInput.trim(), newCurrency);
+      writeStoredValue(PROFILE_STORAGE_KEY, result.profile_id);
+      setProfileId(result.profile_id);
+      setRefreshKey((value) => value + 1);
+    } catch (error) { setSampleError(describeApiError(error)); }
   }
 
   async function handleLoadSample() {
@@ -205,12 +221,14 @@ export default function Dashboard() {
         <div>
           <h1 className="page-title">Financial overview</h1>
           <p className="mt-2 text-sm text-slate-600">
-            A view of your latest profile analysis and agent activity.
+            Your spending, plans, and progress — together in one place.
           </p>
         </div>
         {sampleIsActive && <StatusBadge status="info" label="Sample data" />}
       </section>
 
+      <section className="workspace-guide"><h2>Your financial picture starts here.</h2><p>Add your income and expenses first. Then understand your spending, build a budget, and bring it all together in a report. Or ask the Master Agent to connect the steps for you.</p><div className="workspace-steps"><Link to="/expense-analysis"><span>1</span>Add expenses</Link><Link to="/expense-analysis"><span>2</span>Analyze spending</Link><Link to="/budget-planning"><span>3</span>Plan a budget</Link><Link to="/reports"><span>4</span>Create a report</Link></div></section>
+      <details className="profile-settings"><summary>Manage financial profiles and currencies</summary>
       <form
         className="surface-card flex flex-wrap items-end gap-3"
         onSubmit={handleLoadProfile}
@@ -221,7 +239,8 @@ export default function Dashboard() {
             className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-800 outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-100"
             value={profileInput}
             onChange={(event) => setProfileInput(event.target.value)}
-            placeholder="Enter an existing profile ID"
+            placeholder="Enter or create a profile ID"
+            list="saved-profiles"
           />
         </label>
         <button className="rounded-md bg-brand-blue px-4 py-2 text-sm font-semibold text-white hover:opacity-90" type="submit">
@@ -229,7 +248,13 @@ export default function Dashboard() {
         </button>
       </form>
 
-      {sampleError && <ErrorState title="Sample data could not be loaded" message={sampleError} />}
+      <datalist id="saved-profiles">{profiles.map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.is_sample ? "Sample" : profile.currency}</option>)}</datalist>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm">New profile currency <input className="rounded-md border border-slate-300 px-3 py-2 w-24" aria-label="New profile currency" value={newCurrency} onChange={(event) => setNewCurrency(event.target.value.toUpperCase())} maxLength={3} /></label>
+        <button className="rounded-md border border-slate-300 px-4 py-2 text-sm" type="button" onClick={handleCreateProfile}>Create profile</button>
+      </div>
+      </details>
+      {sampleError && <ErrorState title="Profile action failed" message={sampleError} />}
       {Object.values(errors).some((error) => error instanceof ApiError && error.code === "persistence_not_configured") && (
         <Warning
           title="Persistence is not configured"
@@ -238,10 +263,8 @@ export default function Dashboard() {
       )}
       {unavailableAgents.length > 0 && (
         <Warning
-          title="Some agents are not fully available"
-          message={unavailableAgents
-            .map(([name, agent]) => `${name.replaceAll("_", " ")}: ${agent.integration_status.status}${agent.integration_status.missing?.length ? ` (${agent.integration_status.missing.join(", ")})` : ""}`)
-            .join(" · ")}
+          title="Your agent capabilities"
+          message="Expense calculations, budget planning, and reports use your saved data. Live financial research and AI-written interpretation become available when their providers are connected by the workspace owner."
         />
       )}
 
@@ -255,12 +278,7 @@ export default function Dashboard() {
       ) : errors.summary?.code === "missing_transactions" ? (
         <Empty
           title="No transactions yet"
-          description="Add transactions or create a labelled sample profile before viewing monthly analysis."
-        />
-      ) : errors.summary?.code === "missing_transactions" ? (
-        <Empty
-          title="No transactions yet"
-          description="Add transactions or create a labelled sample profile before viewing monthly analysis."
+          description="Add your first income or expense to start building your financial picture."
         />
       ) : errors.summary && !data.summary ? (
         <ErrorState
@@ -295,7 +313,7 @@ export default function Dashboard() {
                   ]}
                   margin={{ top: 8, right: 8, left: 8, bottom: 8 }}
                 >
-                  <CartesianGrid stroke="#E2E8F0" strokeDasharray="3 3" vertical={false} />
+                  <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} />
                   <YAxis tickLine={false} axisLine={false} width={72} />
                   <Tooltip formatter={(value) => formatMoney(value, currency)} />

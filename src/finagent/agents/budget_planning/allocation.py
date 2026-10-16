@@ -152,6 +152,9 @@ def baseline_allocation(
         if request.essential_categories is not None
         else DEFAULT_ESSENTIAL_CATEGORIES
     )
+    protect_uncategorized = request.essential_categories is None and any(gap.issue == "missing_category" for gap in request.expense_analysis.data_gaps)
+    if protect_uncategorized:
+        essential_categories = essential_categories | {ExpenseCategory.other}
     if request.savings_goal is None:
         target = _quantize(income * Decimal("0.20"))
         assumptions = [
@@ -212,6 +215,10 @@ def baseline_allocation(
             for category in discretionary
         }
     )
+    if protect_uncategorized:
+        assumptions.append("Uncategorized spending is kept at its current level until you confirm which costs are flexible. Correct categories or choose essential expenses to refine this budget.")
+    if summary.refund_total and summary.refund_total.amount > 0:
+        assumptions.append("Money received includes refunds. Refunds are not regular earnings; confirm that future income can support this plan.")
     return BaselineAllocation(
         income=income,
         target=target,

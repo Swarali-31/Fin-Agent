@@ -13,8 +13,8 @@ export const reviseBudget = (payload, profileId) =>
     method: "POST",
     body: payload,
   });
-export const runFinancialResearch = (payload) =>
-  request("/agents/financial-research/run", { method: "POST", body: payload });
+export const runFinancialResearch = (payload, profileId) =>
+  request(`/agents/financial-research/run${profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ""}`, { method: "POST", body: payload });
 export const runFinancialReport = (payload, profileId) =>
   request(`/agents/financial-report/run${profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ""}`, {
     method: "POST",

@@ -488,10 +488,15 @@ def revise_budget(
     previous: BudgetPlan,
     new_analysis: ExpenseAnalysisResult,
     llm: Any | None = None,
+    *,
+    savings_goal: Any | None = None,
+    essential_categories: Any | None = None,
 ) -> BudgetPlan:
-    """Rebuild a plan for a new analysis version, retaining the prior target/preferences."""
+    """Rebuild a versioned plan, retaining preferences unless explicitly changed."""
     if (
-        new_analysis.status != AgentStatus.failed
+        savings_goal is None
+        and essential_categories is None
+        and new_analysis.status != AgentStatus.failed
         and new_analysis.summary is not None
         and new_analysis.analysis_version
         and new_analysis.analysis_version == previous.source_analysis_version
@@ -515,10 +520,10 @@ def revise_budget(
     ]
     request = BudgetRequest(
         expense_analysis=new_analysis,
-        savings_goal={
+        savings_goal=savings_goal or {
             "monthly_target": previous.feasibility.requested_monthly_savings
         },
-        essential_categories=previous_essentials or None,
+        essential_categories=essential_categories if essential_categories is not None else previous_essentials or None,
         currency=previous.currency,
     )
     revision = previous.revision + 1

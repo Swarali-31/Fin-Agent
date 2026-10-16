@@ -365,7 +365,7 @@ def build_report_graph(llm: Any | None = None) -> Any:
                     else []
                 ),
                 risk_considerations=[
-                    gap.question for gap in request.expense_analysis.data_gaps
+                    question for question in dict.fromkeys(gap.question for gap in request.expense_analysis.data_gaps)
                 ],
             )
             if state.get("llm_failed"):

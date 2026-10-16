@@ -1,0 +1,23 @@
+id,date,description,amount,type,category,is_recurring
+03_two_months_history-8-salary,2026-08-01,DEMO - Salary or freelance income,80000,income,,true
+03_two_months_history-8-housing,2026-08-02,DEMO - housing,20000.00,expense,housing,true
+03_two_months_history-8-groceries,2026-08-03,DEMO - groceries,6000.00,expense,groceries,false
+03_two_months_history-8-utilities,2026-08-04,DEMO - utilities,3000.00,expense,utilities,true
+03_two_months_history-8-transport,2026-08-05,DEMO - transport,4000.00,expense,transport,false
+03_two_months_history-8-dining,2026-08-06,DEMO - dining,7000.00,expense,dining,false
+03_two_months_history-8-shopping,2026-08-07,DEMO - shopping,5000.00,expense,shopping,false
+03_two_months_history-8-entertainment,2026-08-08,DEMO - entertainment,3000.00,expense,entertainment,false
+03_two_months_history-8-subscriptions,2026-08-09,DEMO - subscriptions,1000.00,expense,subscriptions,true
+03_two_months_history-8-healthcare,2026-08-10,DEMO - healthcare,2000.00,expense,healthcare,false
+03_two_months_history-8-insurance,2026-08-11,DEMO - insurance,4000.00,expense,insurance,true
+03_two_months_history-9-salary,2026-09-01,DEMO - Salary or freelance income,80000,income,,true
+03_two_months_history-9-housing,2026-09-02,DEMO - housing,20000.00,expense,housing,true
+03_two_months_history-9-groceries,2026-09-03,DEMO - groceries,6000.00,expense,groceries,false
+03_two_months_history-9-utilities,2026-09-04,DEMO - utilities,3000.00,expense,utilities,true
+03_two_months_history-9-transport,2026-09-05,DEMO - transport,4000.00,expense,transport,false
+03_two_months_history-9-dining,2026-09-06,DEMO - dining,7000.00,expense,dining,false
+03_two_months_history-9-shopping,2026-09-07,DEMO - shopping,5000.00,expense,shopping,false
+03_two_months_history-9-entertainment,2026-09-08,DEMO - entertainment,3000.00,expense,entertainment,false
+03_two_months_history-9-subscriptions,2026-09-09,DEMO - subscriptions,1000.00,expense,subscriptions,true
+03_two_months_history-9-healthcare,2026-09-10,DEMO - healthcare,2000.00,expense,healthcare,false
+03_two_months_history-9-insurance,2026-09-11,DEMO - insurance,4000.00,expense,insurance,true

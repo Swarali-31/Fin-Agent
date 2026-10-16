@@ -27,6 +27,7 @@ export default function SourceList({ sources = [], sourceIds }) {
               </span>
             )}
           </div>
+          {source.snippet && <p className="mt-2 text-sm text-slate-600"><span className="font-medium">Source excerpt: </span>{source.snippet}</p>}
           {source.url && (
             <a
               className="mt-2 block break-all text-sm text-blue-700 underline"

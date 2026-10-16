@@ -39,6 +39,7 @@ class BudgetPlanningAdapter(AgentAdapterBase):
         try:
             previous_plan = BudgetPlan.model_validate(previous)
             analysis = ExpenseAnalysisResult.model_validate(new_analysis)
+            preferences = BudgetRequest.model_validate({"expense_analysis": analysis, **((context or {}).get("budget_preferences") or {})})
         except ValidationError as exc:
             return self.validation_failure(
                 input_value=input_value,
@@ -58,7 +59,7 @@ class BudgetPlanningAdapter(AgentAdapterBase):
             )
         return await self.invoke(
             input_value=input_value,
-            operation=lambda: revise_budget(previous_plan, analysis, llm=llm),
+            operation=lambda: revise_budget(previous_plan, analysis, llm=llm, savings_goal=preferences.savings_goal, essential_categories=preferences.essential_categories),
             started_at=started_at,
             started_counter=started_counter,
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -34,6 +35,15 @@ def success(
 
 
 def install_exception_handlers(app: Any) -> None:
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+        return _error_response(request, 409, "record_conflict", "This record already exists or conflicts with saved data.", None)
+
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(ProgrammingError)
+    async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        return _error_response(request, 503, "database_unavailable", "Your workspace database is unavailable. Please contact the workspace owner.", None)
+
     @app.exception_handler(PersistenceNotConfigured)
     async def persistence_not_configured_handler(
         request: Request,

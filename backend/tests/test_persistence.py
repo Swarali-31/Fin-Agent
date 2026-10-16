@@ -261,3 +261,13 @@ def test_transaction_write_requires_saved_profile(repository: PostgresRepository
             _profile().transactions,
             currency="INR",
         )
+
+
+def test_repeated_budget_save_reuses_record(repository):
+    profile = _profile()
+    repository.save_profile(profile)
+    budget = _budget(budget_id="bp-repeat-test", revision=1, source_version="ea-test-001")
+    first = repository.save_budget(profile.profile_id, budget)
+    assert repository.save_budget(profile.profile_id, budget) == first
+    items, total = repository.list_budgets(profile_id=profile.profile_id, limit=20, offset=0)
+    assert total == 1

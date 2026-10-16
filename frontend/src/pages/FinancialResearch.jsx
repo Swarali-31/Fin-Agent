@@ -1,235 +1,70 @@
-import { useState } from "react";
-import { Empty, ErrorState, Loading, Warning } from "../components/StateViews.jsx";
-import StatusBadge from "../components/StatusBadge.jsx";
-import SourceList from "../components/SourceList.jsx";
-import { ApiError } from "../services/api.js";
+import { useEffect, useState } from "react";
 import { runFinancialResearch } from "../services/agents.js";
-
-function researchError(error) {
-  if (
-    error instanceof ApiError &&
-    ["misconfigured", "search_not_configured"].includes(error.code)
-  ) {
-    return {
-      searchNotConfigured: true,
-      message: error.message,
-    };
-  }
-  return {
-    searchNotConfigured: false,
-    message: error instanceof Error ? error.message : "The research request failed.",
-  };
-}
-
-function resultEnvelope(value) {
-  return value?.result ? value : { status: value?.status ?? "unknown", result: value };
-}
-
-function findingKind(finding) {
-  const value = finding.kind ?? finding.type;
-  if (["fact", "estimate", "conclusion"].includes(value)) return value;
-  return "cited finding";
-}
+import { listResearch } from "../services/research.js";
+import SourceList from "../components/SourceList.jsx";
 
 export default function FinancialResearch() {
+  const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState("");
-  const [jurisdiction, setJurisdiction] = useState("IN");
-  const [maxSources, setMaxSources] = useState("5");
-  const [result, setResult] = useState(null);
-  const [taskStatus, setTaskStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [region, setRegion] = useState("IN");
+  const [language, setLanguage] = useState("auto");
+  const [historyError, setHistoryError] = useState("");
+  const profileId = localStorage.getItem("finagent.profileId") || undefined;
+  useEffect(() => {
+    let active = true;
+    listResearch(profileId ? {profile_id: profileId} : {}).then((data) => {
+      if (active) { setHistory(data?.items || []); setHistoryError(""); }
+    }).catch(() => { if (active) setHistoryError("Saved research is temporarily unavailable."); });
+    return () => { active = false; };
+  }, [profileId, messages]);
 
-  async function submitQuestion(event) {
+  async function send(event) {
     event.preventDefault();
-    if (!question.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTaskStatus("running");
+    const text = question.trim();
+    if (!text || loading) return;
+    const conversation = messages.filter((message) => message.content).slice(-12).map(({role, content}) => ({role, content: content.slice(0,6000)}));
+    setMessages((previous) => [...previous, {role:"user", content:text}]);
+    setQuestion(""); setLoading(true); setError(null);
     try {
-      const response = resultEnvelope(await runFinancialResearch({
-        question: question.trim(),
-        jurisdiction: jurisdiction.trim() || "IN",
-        max_sources: Number(maxSources),
-      }));
-      setResult(response.result);
-      setTaskStatus(response.status ?? response.result?.status ?? "unknown");
-    } catch (requestError) {
-      setError(researchError(requestError));
-      setTaskStatus("failed");
-    } finally {
-      setLoading(false);
-    }
+      const response = await runFinancialResearch({ question:text, jurisdiction:region || "IN", response_language:language, max_sources:5, conversation }, profileId);
+      const result = response.result || response;
+      const content = (result.findings || []).map((finding) => finding.statement).join("\n\n");
+      setMessages((previous) => [...previous, {role:"assistant", content, result}]);
+    } catch (cause) {
+      setMessages((previous) => previous.slice(0,-1));
+      setQuestion(text);
+      setError(cause);
+    } finally { setLoading(false); }
   }
-
-  const sources = result?.sources ?? [];
-
-  return (
-    <div className="space-y-6">
-      <section>
-        <h1 className="page-title">Financial Research</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Ask a financial education question and review source-backed findings.
-        </p>
-      </section>
-
-      <form className="surface-card space-y-4" onSubmit={submitQuestion}>
-        <label className="block text-sm font-semibold text-slate-700" htmlFor="research-question">
-          Research question
-          <textarea
-            id="research-question"
-            className="mt-2 min-h-28 w-full rounded-md border border-slate-300 px-3 py-3 text-sm font-normal outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-100"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder="For example: How do central banks use policy rates?"
-            required
-          />
-        </label>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-semibold text-slate-600">
-            Jurisdiction
-            <input
-              className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal"
-              value={jurisdiction}
-              onChange={(event) => setJurisdiction(event.target.value)}
-              maxLength={64}
-            />
-          </label>
-          <label className="text-xs font-semibold text-slate-600">
-            Maximum sources
-            <input
-              className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal"
-              type="number"
-              min="1"
-              max="10"
-              value={maxSources}
-              onChange={(event) => setMaxSources(event.target.value)}
-              required
-            />
-          </label>
-        </div>
-        <button
-          className="rounded-md bg-brand-blue px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          type="submit"
-          disabled={loading || !question.trim()}
-        >
-          {loading ? "Researching…" : "Run research"}
-        </button>
-      </form>
-
-      {taskStatus && (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm text-slate-600">Task status</span>
-          <StatusBadge status={taskStatus} label={`Research ${taskStatus}`} />
-        </div>
-      )}
-      {loading && <Loading label="Searching sources and preparing findings" />}
-      {error?.searchNotConfigured && (
-        <section className="surface-card border-amber-300 bg-amber-50" role="alert">
-          <h2 className="text-base font-semibold text-amber-900">Search not configured</h2>
-          <p className="mt-2 text-sm text-amber-900">{error.message}</p>
-          <p className="mt-2 text-sm text-amber-900">
-            Configure <code>SEARCH_PROVIDER=tavily</code> and <code>TAVILY_API_KEY</code> in the backend environment, then restart the API. Do not place the key in frontend environment variables.
-          </p>
-        </section>
-      )}
-      {error && !error.searchNotConfigured && (
-        <ErrorState
-          title="Research request failed"
-          message={error.message}
-          onRetry={() => {
-            if (question.trim()) {
-              void submitQuestion({ preventDefault() {} });
-            }
-          }}
-        />
-      )}
-
-      {result && taskStatus !== "failed" && (
-        <div className="space-y-5">
-          {result.status === "partial" && (
-            <Warning
-              title="Partial research result"
-              message="The research agent returned partial results. Review the limitations and citations before relying on these findings."
-            />
-          )}
-          {result.status === "failed" && (
-            <ErrorState
-              title="Research failed"
-              message={result.errors?.map((item) => item.message).join(" ") || "The agent reported failed status."}
-            />
-          )}
-          {result.status !== "failed" && (
-            <>
-              <section className="surface-card">
-                <div className="card-heading">
-                  <div>
-                    <h2>Findings</h2>
-                    <p>Statements and citations returned by the research agent.</p>
-                  </div>
-                  <StatusBadge status={result.status ?? taskStatus} />
-                </div>
-                {result.findings?.length ? (
-                  <ol className="mt-4 space-y-4">
-                    {result.findings.map((finding, index) => {
-                      const citedSources = sources.filter((source) =>
-                        finding.source_ids?.includes(source.source_id),
-                      );
-                      const kind = findingKind(finding);
-                      return (
-                        <li className="rounded-md border border-slate-200 p-4" key={`${finding.statement}-${index}`}>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className={`rounded-full border px-2 py-1 text-xs capitalize ${
-                              kind === "fact" ? "border-blue-200 bg-blue-50 text-blue-800" :
-                                kind === "estimate" ? "border-amber-200 bg-amber-50 text-amber-800" :
-                                  kind === "conclusion" ? "border-emerald-200 bg-emerald-50 text-emerald-800" :
-                                    "border-slate-200 bg-slate-50 text-slate-700"
-                            }`}>
-                              {kind}
-                            </span>
-                            <span className="text-xs text-slate-500">Confidence: {finding.confidence ?? "not provided"}</span>
-                          </div>
-                          <p className="mt-3 text-sm leading-6 text-slate-800">{finding.statement}</p>
-                          <p className="mt-3 text-xs font-semibold text-slate-600">Cited sources</p>
-                          {citedSources.length ? (
-                            <SourceList sources={citedSources} sourceIds={finding.source_ids} />
-                          ) : (
-                            <p className="mt-2 text-sm text-amber-800">
-                              No matching source metadata was returned for citation IDs: {finding.source_ids?.join(", ") || "none"}.
-                            </p>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                ) : (
-                  <Empty title="No findings returned" description="The agent returned no supported findings." />
-                )}
-              </section>
-
-              <section className="surface-card">
-                <h2 className="text-base font-semibold text-slate-800">Retrieved sources</h2>
-                <SourceList sources={sources} />
-              </section>
-            </>
-          )}
-          {result.limitations?.length > 0 && (
-            <Warning
-              title="Limitations"
-              message={result.limitations.map((item) => item.message ?? item).join(" · ")}
-            />
-          )}
-          {result.disclaimer && (
-            <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-              {result.disclaimer}
-            </p>
-          )}
-        </div>
-      )}
-      {!loading && !error && !result && (
-        <Empty title="No research run yet" description="Submit a question to see verified findings and retrieved sources." />
-      )}
+  function openHistory(item) {
+    const result = item.result;
+    if (!result) return;
+    setMessages([{role:"user", content:result.question}, {role:"assistant", content:(result.findings || []).map((finding) => finding.statement).join("\n\n"), result}]);
+    setError(null); setQuestion("");
+  }
+  return <div className="mx-auto max-w-4xl space-y-5">
+    <div className="flex items-center justify-between gap-4"><div><h1 className="page-title">Financial Research</h1><p className="mt-2 text-sm text-slate-600">Ask a money question. Follow up naturally.</p></div><button disabled={loading} className="rounded-md border px-3 py-2 text-sm" onClick={() => {setMessages([]); setQuestion(""); setError(null);}}>New chat</button></div>
+    <details className="surface-card"><summary className="cursor-pointer text-sm font-semibold">Saved questions and settings</summary><label className="mt-3 block text-sm">Country or region<input className="ml-3 rounded border p-2" value={region} maxLength={64} onChange={(event) => setRegion(event.target.value)} /></label>{historyError && <p role="alert">{historyError}</p>}{history.map((item) => <button key={item.id} disabled={loading} className="mt-3 block text-left text-sm text-brand-blue underline" onClick={() => openHistory(item)}>{item.result?.question || "Saved question"}</button>)}</details>
+    {!messages.length && <div className="flex flex-wrap gap-2" aria-label="Example research questions">{["How does an emergency fund work?", "What should I understand before investing?", "How can I reduce unnecessary monthly expenses?"].map((text) => <button key={text} className="rounded-full border px-3 py-2 text-sm" onClick={() => setQuestion(text)}>{text}</button>)}</div>}
+    <label className="block text-sm">Answer language<select aria-label="Answer language" value={language} onChange={(event) => setLanguage(event.target.value)} className="ml-3 rounded border bg-white p-2">{[["auto","Match my question"],["English","English"],["Hindi","हिन्दी"],["Marathi","मराठी"],["Gujarati","ગુજરાતી"],["Bengali","বাংলা"],["Tamil","தமிழ்"],["Telugu","తెలుగు"],["Kannada","ಕನ್ನಡ"],["Malayalam","മലയാളം"],["Punjabi","ਪੰਜਾਬੀ"],["Spanish","Español"],["French","Français"],["Arabic","العربية"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+    <div role="log" aria-label="Research conversation" aria-live="polite" className="space-y-5">
+      {messages.map((message,index) => <article key={index} className={message.role === "user" ? "ml-8 rounded-xl bg-brand-blue p-4 text-white" : "surface-card mr-4"}>
+        <p className="mb-2 text-xs font-semibold uppercase opacity-70">{message.role === "user" ? "You" : "FinAgent"}</p>
+        {message.role === "user" ? <p dir="auto" className="whitespace-pre-wrap">{message.content}</p> : <>
+          {message.result?.findings?.length ? <div className="space-y-3">{message.result.findings.map((finding,i) => <div key={i}><p dir="auto" className="text-sm leading-7">{finding.statement}</p><div className="mt-1 flex gap-3">{(message.result.sources || []).filter((source) => finding.source_ids?.includes(source.source_id)).map((source) => <a className="text-xs text-brand-blue underline" key={source.source_id} href={source.url} target="_blank" rel="noopener noreferrer">{source.publisher || source.title}</a>)}</div></div>)}</div> : <p className="text-sm">I couldn't prepare a supported answer. Try a more specific question or retry shortly.</p>}
+          {!!message.result?.limitations?.length && <details className="mt-3 text-sm text-amber-800"><summary className="cursor-pointer">Answer limitations</summary><ul className="mt-2 list-disc pl-5">{message.result.limitations.map((item,i) => <li key={i}>{item.message || item}</li>)}</ul></details>}
+          {!!message.result?.errors?.length && <p role="alert" className="mt-3 text-sm text-red-700">{message.result.errors.map((item) => item.message).join(" ")}</p>}
+          {message.result?.disclaimer && <p className="mt-3 text-xs text-slate-500">{message.result.disclaimer}</p>}
+          {!!message.result?.sources?.length && <details className="mt-3 text-sm"><summary className="cursor-pointer">Sources ({message.result.sources.length})</summary><SourceList sources={message.result.sources} /></details>}
+        </>}
+      </article>)}
+      {loading && <p role="status" className="text-sm text-slate-600">Searching sources and writing an answer…</p>}
     </div>
-  );
+    {error && <div role="alert" className="rounded border border-red-200 p-3 text-sm text-red-800"><p>{["search_not_configured","misconfigured"].includes(error.code) ? "Search not configured" : "Couldn't send your question"}</p><p>{error.message}</p>{["search_not_configured","misconfigured"].includes(error.code) && <details><summary>Connection settings</summary>Configure TAVILY_API_KEY in the backend environment.</details>}</div>}
+    <form onSubmit={send} className="surface-card flex items-end gap-3"><label htmlFor="research-question" className="flex-1 text-sm font-semibold">What would you like to learn about money?<textarea id="research-question" className="mt-2 block min-h-20 w-full rounded-md border p-3 font-normal" placeholder={messages.length ? "Ask a follow-up…" : "Ask a financial question…"} value={question} maxLength={6000} onChange={(event) => setQuestion(event.target.value)} required onKeyDown={(event) => {if(event.key === "Enter" && !event.shiftKey) {event.preventDefault(); if(question.trim() && !loading) void send(event);}}} /></label><button className="rounded-md bg-brand-blue px-4 py-3 text-white disabled:opacity-50" disabled={loading || !question.trim()}>{loading ? "Thinking…" : "Send"}</button></form>
+    <p className="text-xs text-slate-500">Educational information. Check cited sources before making financial decisions.</p>
+  </div>;
 }

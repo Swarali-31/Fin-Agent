@@ -39,6 +39,9 @@ def get_llm(settings: Settings | None = None, **kwargs: Any) -> BaseChatModel:
 
     cfg = settings or get_settings()
     provider, model = cfg.require_llm_config()
+    provider = provider.strip().lower()
+    if provider == "google":
+        provider = "google_genai"
     api_key = cfg.require_api_key_for_provider(provider)
 
     package = _PROVIDER_PACKAGE.get(provider.lower())
@@ -61,6 +64,8 @@ def get_llm(settings: Settings | None = None, **kwargs: Any) -> BaseChatModel:
         "model": model,
         "model_provider": provider.lower(),
         "temperature": cfg.llm_temperature,
+        "timeout": 45,
+        "max_retries": 1,
         **kwargs,
     }
     # LangChain providers use different env var names; pass key explicitly when possible.

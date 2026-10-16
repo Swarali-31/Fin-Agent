@@ -78,7 +78,7 @@ def test_tavily_sdk_errors_are_wrapped_as_search_error() -> None:
 
     provider._client = SyntheticFailingTavilySDKClient()
 
-    with pytest.raises(SearchError, match="synthetic Tavily outage"):
+    with pytest.raises(SearchError, match="search provider could not complete"):
         provider.search("synthetic query", max_results=1)
 
 
@@ -100,3 +100,13 @@ def test_live_tavily_search_smoke() -> None:
     assert results
     assert results[0].title
     assert results[0].url.startswith("https://")
+
+
+@pytest.mark.parametrize('payload',[None, [], {'results':{}}, {'results':['bad source']}])
+def test_malformed_search_responses_do_not_look_successful(payload):
+    class BrokenSDK:
+        def search(self, **kwargs): return payload
+    provider=TavilySearchProvider(api_key='test-secret-do-not-expose',timeout_seconds=1)
+    provider._client=BrokenSDK()
+    with pytest.raises(SearchError) as raised: provider.search('TEST query',3)
+    assert 'test-secret-do-not-expose' not in str(raised.value)

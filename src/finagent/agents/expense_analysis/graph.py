@@ -27,6 +27,7 @@ class _ExpenseState(TypedDict, total=False):
     verified_patterns: list[SpendingInsight]
     clarifying_questions: list[str]
     llm_error: bool
+    llm_failure_reason: str
     result: ExpenseAnalysisResult
 
 
@@ -110,8 +111,23 @@ def build_expense_analysis_graph(llm: Any | None = None) -> Any:
             )
             interpretation = ExpenseInterpretation.model_validate(output)
             return {"interpretation": interpretation}
-        except Exception:
-            return {"llm_error": True, "interpretation": ExpenseInterpretation()}
+        except Exception as exc:
+            # Never return provider exception text: it can contain credentials or
+            # request content. Show a safe, actionable cause instead.
+            code = str(getattr(exc, "status_code", getattr(exc, "code", "")))
+            if llm is False:
+                reason = "AI interpretation is not connected. Configure an AI provider and API key, then run analysis again."
+            elif code == "429":
+                reason = "The AI provider's request limit was reached. Check the account quota and try again later."
+            elif code in {"401", "403"}:
+                reason = "The AI provider denied access. Check the backend API key and its model permissions."
+            elif code == "404":
+                reason = "The configured AI model is unavailable to this account. Choose an available model and run analysis again."
+            elif code in {"500", "502", "503", "504"}:
+                reason = "The AI provider is temporarily unavailable. Your expense totals are saved; run analysis again later."
+            else:
+                reason = "The AI could not return a valid analysis. Your calculated totals are available; try running analysis again."
+            return {"llm_error": True, "llm_failure_reason": reason, "interpretation": ExpenseInterpretation()}
 
     def verify_interpretation(state: _ExpenseState) -> dict[str, Any]:
         allowed_categories = {
@@ -155,7 +171,7 @@ def build_expense_analysis_graph(llm: Any | None = None) -> Any:
                     [
                         Limitation(
                             code="llm_interpretation_unavailable",
-                            message="Language-model interpretation was unavailable; deterministic results are included.",
+                            message=state.get("llm_failure_reason", "AI interpretation was unavailable. Calculated totals are included."),
                         )
                     ]
                     if llm_error

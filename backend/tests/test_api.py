@@ -133,7 +133,9 @@ def client() -> Any:
         "search_provider": SyntheticSearchProvider(),
     }
     with TestClient(app) as test_client:
-        yield test_client, repository
+        account = test_client.post("/api/v1/auth/signup", json={"name": "TEST FIXTURE", "email": "api-tests@example.invalid", "password": "test-only-password"})
+        assert account.status_code == 201, account.text
+        yield test_client, repository.for_user(account.json()["data"]["id"])
     app.state.repository = None
     app.state.adapters = None
     app.state.agent_context = {}
@@ -481,3 +483,91 @@ def test_list_detail_and_report_download_envelopes(client: Any) -> None:
     ).headers["content-disposition"]
     records = assert_envelope(test_client.get("/api/v1/reports?page=1&page_size=10"))
     assert records["data"]["total"] == 1
+
+
+def test_stored_profile_workflow_persists_real_specialist_outputs(client: Any) -> None:
+    import time
+    test_client, repository = client
+    # Use native deterministic specialist behavior, not the synthetic planner.
+    app.state.agent_context = {"llm": False}
+    profile_id = "integration-profile"
+    assert_envelope(test_client.post("/api/v1/profiles", json={"profile_id": profile_id}), 201)
+    rows = profile(profile_id).model_dump(mode="json")["transactions"]
+    rows += [{"id": "income", "date": "2026-01-01", "description": "Salary", "amount": {"amount": "3000.00"}, "type": "income"}]
+    assert_envelope(test_client.post(f"/api/v1/profiles/{profile_id}/transactions", json={"transactions": rows}))
+    assert len(assert_envelope(test_client.get(f"/api/v1/profiles/{profile_id}/transactions"))["data"]["transactions"]) == len(rows)
+    assert any(p["profile_id"] == profile_id for p in assert_envelope(test_client.get("/api/v1/profiles"))["data"])
+    created = assert_envelope(test_client.post("/api/v1/workflows", json={"task": "Generate a financial report", "context": {"profile_id": profile_id}}), 202)
+    run_id = created["data"]["run_id"]
+    for _ in range(100):
+        run = test_client.get(f"/api/v1/workflows/{run_id}").json()["data"]
+        if run["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert run["status"] in {"success", "partial"}, run
+    analysis_record = repository.get_latest_expense_analysis(profile_id)
+    budgets, _ = repository.list_budgets(profile_id=profile_id, limit=10, offset=0)
+    reports, _ = repository.list_reports(profile_id=profile_id, limit=10, offset=0)
+    assert analysis_record and budgets and reports
+    assert budgets[0]["result"]["source_analysis_version"] == analysis_record["result"]["analysis_version"]
+    changed = {**rows[0], "id": "new-expense"}
+    assert_envelope(test_client.post(f"/api/v1/profiles/{profile_id}/transactions", json={"transactions": [changed]}))
+    stale = test_client.post(f"/api/v1/agents/budget-planning/run?profile_id={profile_id}", json={})
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "stale_analysis"
+    assert_envelope(test_client.post("/api/v1/agents/expense-analysis/run", json={"profile_id": profile_id}))
+    stale_report = test_client.post(f"/api/v1/agents/financial-report/run?profile_id={profile_id}", json={})
+    assert stale_report.status_code == 409
+    assert stale_report.json()["error"]["code"] == "stale_budget"
+    assert_envelope(test_client.post(f"/api/v1/profiles/{profile_id}/sample-data"), 409)
+    assert repository.get_profile(profile_id)["is_sample"] is False
+
+
+def test_empty_profile_cannot_invent_financial_inputs(client: Any) -> None:
+    test_client, _ = client
+    assert_envelope(test_client.post("/api/v1/profiles", json={"profile_id": "empty"}), 201)
+    response = test_client.post("/api/v1/agents/expense-analysis/run", json={"profile_id": "empty"})
+    assert response.status_code == 422
+
+
+def test_workflow_rejects_profile_changed_during_execution(client: Any) -> None:
+    import time
+    from threading import Event
+    changed_saved = Event()
+    test_client, repository = client
+    original = profile("changed-during-run")
+    repository.save_profile(original)
+    repository.save_transactions(original.profile_id, original.transactions, currency=original.currency)
+    adapter = app.state.adapters["expense_analysis"]
+    run = adapter.run
+
+    async def run_then_change(payload: Any, context: Any) -> Any:
+        result = await run(payload, context)
+        changed = original.transactions[0].model_copy(update={"amount": Money(amount="999.00")})
+        repository.save_transactions(original.profile_id, [changed], currency=original.currency)
+        changed_saved.set()
+        return result
+
+    adapter.run = run_then_change
+    app.state.agent_context = {"llm": False}
+    created = assert_envelope(test_client.post("/api/v1/workflows", json={"task": "Analyze my spending", "context": {"profile_id": original.profile_id}}), 202)
+    # SQLite StaticPool shares one connection: do not poll while the mutation
+    # transaction is open, or a concurrent reader can roll it back.
+    assert changed_saved.wait(2)
+    for _ in range(100):
+        data = test_client.get(f"/api/v1/workflows/{created['data']['run_id']}").json()["data"]
+        if data["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert data["status"] == "failed"
+    assert data["result"]["errors"][-1]["code"] == "stale_analysis"
+    assert repository.get_latest_expense_analysis(original.profile_id) is None
+
+
+def test_research_with_profile_appears_in_shared_history(client: Any) -> None:
+    test_client, repository = client
+    repository.save_profile(profile("research-profile"))
+    assert_envelope(test_client.post("/api/v1/agents/financial-research/run?profile_id=research-profile", json={"question": "Research financial education"}))
+    items, total = repository.list_research_runs(profile_id="research-profile", limit=10, offset=0)
+    assert total == 1
+    assert items[0]["result"]["sources"]

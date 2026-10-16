@@ -154,3 +154,9 @@ def test_recurring_detection_requires_cross_month_amount_stability() -> None:
     descriptions = {item.description for item in recurring}
     assert "Rent" in descriptions
     assert "Groceries" not in descriptions
+
+def test_transaction_order_does_not_make_analysis_stale() -> None:
+    from finagent.sample_data import sample_profile
+    profile = sample_profile()
+    reversed_profile = profile.model_copy(update={"transactions": list(reversed(profile.transactions))})
+    assert compute_expense_metrics(profile).analysis_version == compute_expense_metrics(reversed_profile).analysis_version
