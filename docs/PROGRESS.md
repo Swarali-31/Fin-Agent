@@ -130,3 +130,10 @@
 - Live Master demo exposed Gemini planner omitting required specialist input references despite receiving a valid stored profile. Added explicit per-agent input-reference contracts to the planner prompt, preserving all plan validation and actual specialist execution.
 - Corrected demo run 3edcafe1-70f6-44b0-8036-9a0b55c70938 executed Expense Analysis, Financial Research, Budget Planning and Financial Report with a INR30,000 goal. Partial specialist statuses are retained honestly for feasibility/evidence limitations.
 - Verification: frontend31 passed, targeted orchestration/API32 passed, production build passed and whitespace check passed. Stabilized existing SQLite workflow-mutation test by synchronizing its mutation before polling the shared test connection.
+
+### Budget chart, revision browsing, multilingual research and hosting
+- Fixed zero-height responsive charts with an explicit chart height and added a budget/actual legend. Revision browsing includes independent saved runs, labels goals, keeps historical versions read-only, and restores the latest version. History-fetch failures no longer erase the current budget.
+- Added automatic input-language matching and explicit reply language selection to Research, including Hindi, Marathi and other languages; citations retain original URLs. Live Hindi search/synthesis returned genuine Hindi findings and limitations.
+- Applied green and warm-neutral colors across the application. Added Render Free Docker blueprint using the existing Supabase database; secrets remain private environment settings.
+- Verification: full Python150 passed/2 skipped, frontend32 passed and production build passed. Source secret-pattern scan found no matching keys; backend/.env is ignored. Docker image build cannot be run locally because the Docker daemon is stopped.
+- Owner approved committing/pushing codex/finagent-deploy and copying provider/database credentials into Render private environment settings. Source committed locally; remote push currently awaits GitHub authentication. Render account is verified; Free Docker service setup is prepared in Singapore. No cloud service has been deployed yet.
