@@ -174,7 +174,8 @@ def _create_graph(runtime: _Runtime) -> Any:
             runtime.record(state, "error", str(exc), details={"code": exc.code, **exc.details})
             state.terminated = True
         except Exception as exc:
-            # A planner invocation failure uses the deterministic fallback.
+            # A planner invocation failure uses the existing real-agent fallback.
+            runtime.record(state, "validation", "AI planning was unavailable; preparing a standard specialist route.", details={"planner_error_type": type(exc).__name__, "provider_status": str(getattr(exc, "code", getattr(exc, "status_code", "")))})
             try:
                 state.plan = deterministic_plan(state.task, state.context)
                 runtime.record(

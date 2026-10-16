@@ -532,3 +532,10 @@ async def test_literal_research_question_is_bound_to_user_task_then_validated():
         llm=FakeLLM({"steps":[{"id":"research_1","agent":"financial_research","input_refs":{"question":"Explain SIP investing"}}]}))
     assert result.status=="success"
     assert registry["financial_research"].calls[0]["input"]["question"]=="Explain SIP investing"
+
+
+def test_financial_questions_route_to_real_research_without_command_keywords():
+    for question in ["If I want to invest in SIP tell me what to do", "What is a budget?", "How does compound interest work?"]:
+        plan=deterministic_plan(question,{})
+        assert [step.agent for step in plan.steps]==["financial_research"]
+        assert plan.steps[0].input_refs=={"question":"task"}

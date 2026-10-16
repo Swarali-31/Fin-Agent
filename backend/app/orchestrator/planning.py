@@ -77,6 +77,12 @@ def deterministic_plan(task: str, context: dict[str, Any]) -> ExecutionPlan:
 
     # A report requires both financial upstream results. Research is included
     # only when it is explicitly part of the task.
+    finance_question = bool(re.search(r"\b(sips?|invest(?:ing|ment|ments)?|mutual funds?|stocks?|loans?|interest|emergency funds?|pensions?|insurance|budgets?|savings)\b", lowered))
+    explicit_action = bool(re.search(r"\b(create|generate|revise|analy[sz]e)\b", lowered))
+    if finance_question and not explicit_action:
+        # Route educational questions to the actual evidence-backed specialist.
+        research_requested = True
+        report_requested = budget_requested = expense_requested = False
     financial_requested = report_requested or budget_requested or expense_requested
     if not financial_requested and not research_requested:
         raise InvalidPlan(
