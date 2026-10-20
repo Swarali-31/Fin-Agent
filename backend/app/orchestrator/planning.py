@@ -77,6 +77,12 @@ def deterministic_plan(task: str, context: dict[str, Any]) -> ExecutionPlan:
 
     # A report requires both financial upstream results. Research is included
     # only when it is explicitly part of the task.
+    finance_question = bool(re.search(r"\b(sips?|invest(?:ing|ment|ments)?|mutual funds?|stocks?|loans?|interest|emergency funds?|pensions?|insurance|budgets?|savings)\b", lowered))
+    explicit_action = bool(re.search(r"\b(create|generate|revise|analy[sz]e)\b", lowered))
+    if finance_question and not explicit_action:
+        # Route educational questions to the actual evidence-backed specialist.
+        research_requested = True
+        report_requested = budget_requested = expense_requested = False
     financial_requested = report_requested or budget_requested or expense_requested
     if not financial_requested and not research_requested:
         raise InvalidPlan(
@@ -426,7 +432,16 @@ def plan_prompt(task: str, context: dict[str, Any]) -> str:
             "has_profile": _has_profile_input(context),
             "has_transactions": bool(context.get("transactions")),
             "available_agents": sorted(_SUPPORTED_AGENTS),
+            "input_reference_contract": {
+                "expense_analysis": {"profile": "context.profile"},
+                "budget_planning": {"expense_analysis": "result.<expense_step_id>"},
+                "financial_research": {"question": "task"},
+                "financial_report": {"expense_analysis": "result.<expense_step_id>", "budget": "result.<budget_step_id>", "research": "result.<research_step_id>"},
+            },
             "rules": [
+                "input_refs must use the exact keys and paths from input_reference_contract; replace angle-bracket placeholders with actual step IDs",
+                "include optional research reference only when a research step exists; financial_report must depend on it when referenced",
+                "when context has savings_goal, budget_planning also uses savings_goal=context.savings_goal",
                 "budget_planning depends on expense_analysis",
                 "financial_report depends on expense_analysis and budget_planning",
                 "financial_research is independent and optional for a report",

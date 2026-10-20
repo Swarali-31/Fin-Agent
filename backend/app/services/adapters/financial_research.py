@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from finagent.agents.financial_research.graph import run_financial_research
+from finagent.agents.financial_research.cashflow import cashflow_result
 from finagent.agents.financial_research.search import (
     ConfigurationError,
     SearchProvider,
@@ -53,6 +54,10 @@ class FinancialResearchAdapter(AgentAdapterBase):
                 started_at=started_at,
                 started_counter=started_counter,
             )
+        calculated = cashflow_result(request)
+        if calculated is not None:
+            return self.envelope(input_value=input, result=calculated,
+                started_at=started_at, started_counter=started_counter)
         try:
             provider = (
                 context["search_provider"]
@@ -86,7 +91,7 @@ class FinancialResearchAdapter(AgentAdapterBase):
                 code="misconfigured",
                 message=str(exc),
             )
-        return await self.invoke(
+        envelope = await self.invoke(
             input_value=input,
             operation=lambda: run_financial_research(
                 request,
@@ -96,6 +101,10 @@ class FinancialResearchAdapter(AgentAdapterBase):
             started_at=started_at,
             started_counter=started_counter,
         )
+
+        if envelope.result is not None and request.financial_context is not None:
+            envelope.result["financial_context"] = request.financial_context.model_dump(mode="json")
+        return envelope
 
     def _configured_search_provider(self) -> SearchProvider:
         settings = FinAgentSettings(

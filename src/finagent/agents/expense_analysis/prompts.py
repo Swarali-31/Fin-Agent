@@ -31,7 +31,8 @@ infer, or restate amounts, counts, dates, averages, percentages, or other numeri
 Do not make budgets, financial recommendations, research claims, or report prose. Return
 only qualitative spending_patterns and clarifying_questions. Categories and transaction
 IDs must be copied exactly from the supplied allowed lists; omit references you cannot
-support. Keep insights concise and grounded in the supplied metrics."""
+support. Use simple everyday language that a person without finance knowledge can understand.
+Explain each pattern clearly, without jargon. Keep insights concise and grounded in the supplied metrics."""
 
 
 def interpretation_prompt(metrics: dict[str, object]) -> str:

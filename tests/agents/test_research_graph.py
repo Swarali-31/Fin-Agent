@@ -156,7 +156,7 @@ def test_search_failure_retries_and_returns_structured_failure(
     assert not result.findings
 
 
-def test_partial_search_failure_keeps_sources_but_skips_synthesis(
+def test_partial_search_failure_answers_from_successfully_retrieved_sources(
     research_request: ResearchRequest,
     settings_with_synthetic_official_domain: Settings,
     synthetic_search_provider: Any,
@@ -177,7 +177,7 @@ def test_partial_search_failure_keeps_sources_but_skips_synthesis(
     assert result.status == AgentStatus.partial
     assert result.errors[0].code == "search_failed"
     assert result.sources
-    assert result.findings == []
+    assert result.findings
     assert any(item.code == "search_incomplete" for item in result.limitations)
 
 
@@ -306,3 +306,124 @@ def test_configuration_error_is_not_retried(
 
     assert result.status == AgentStatus.failed
     assert result.errors[0].code == "search_not_configured"
+
+
+def test_followup_context_is_labelled_as_context_not_evidence():
+    from finagent.agents.financial_research.prompts import conversational_question
+    request = ResearchRequest(question="Where should I keep it?", conversation=[
+        {"role":"user", "content":"What is an emergency fund?"},
+        {"role":"assistant", "content":"It is money for unexpected expenses."},
+    ])
+    prompt = conversational_question(request)
+    assert "emergency fund" in prompt
+    assert "Current user question: Where should I keep it?" in prompt
+    assert "previous answers are not evidence" in prompt
+
+
+def test_research_language_selection_is_passed_to_grounded_prompt():
+    from finagent.agents.financial_research.prompts import conversational_question
+    request = ResearchRequest(question="What is a budget?", response_language="Marathi")
+    assert "requested language: Marathi" in conversational_question(request)
+    assert "source titles and URLs unchanged" in conversational_question(request)
+    auto = ResearchRequest(question="बजट क्या है?")
+    assert "language of the current user question" in conversational_question(auto)
+
+
+@pytest.mark.parametrize("detail", ["detailed", "brief"])
+def test_answer_depth_reaches_model_and_section_headings_survive(
+    detail, settings_with_synthetic_official_domain, synthetic_search_provider,
+    synthetic_results, synthetic_chat_model,
+):
+    model = synthetic_chat_model(
+        query_response={"search_queries": ["emergency fund guide"], "is_personalized_advice_request": False},
+        synthesis_response={"findings": [{"title": "How to start", "statement": "Save regularly.\n\nReview the goal as your expenses change.", "source_ids": ["S1"], "confidence": "medium"}], "limitations": []},
+    )
+    prompts = []
+    original = model.invoke
+    def capture(messages):
+        prompts.append(messages)
+        return original(messages)
+    model.invoke = capture
+    result = run_financial_research(ResearchRequest(question="Explain emergency funds", response_detail=detail), llm=model,
+        search_provider=synthetic_search_provider(results=synthetic_results))
+    assert f"Answer depth: {detail}" in prompts[-1][1].content
+    assert result.findings[0].title == "How to start"
+    assert "\n\n" in result.findings[0].statement
+    assert result.status == AgentStatus.success
+    assert result.limitations == []
+
+
+@pytest.mark.parametrize("statement", [
+    "Plan how much you can spend before you buy groceries or household essentials.",
+    "Invest in education to develop your financial knowledge before comparing products.",
+])
+def test_ordinary_explanations_are_not_discarded_as_security_orders(
+    statement, settings_with_synthetic_official_domain, synthetic_search_provider,
+    synthetic_results, synthetic_chat_model,
+):
+    result = run_financial_research(ResearchRequest(question="Explain budgeting"), llm=synthetic_chat_model(
+        query_response={"search_queries": ["budgeting guide"], "is_personalized_advice_request": False},
+        synthesis_response=_synthetic_synthesis(statement=statement),
+    ), search_provider=synthetic_search_provider(results=synthetic_results))
+    assert result.findings[0].statement == statement
+    assert not any(item.code == "no_verified_findings" for item in result.limitations)
+
+
+@pytest.mark.parametrize("statement", ["You should buy Alpha Corp shares.", "Invest in AAPL today.", "Buy XYZ now."])
+def test_named_security_orders_still_rejected(
+    statement, settings_with_synthetic_official_domain, synthetic_search_provider,
+    synthetic_results, synthetic_chat_model,
+):
+    result = run_financial_research(ResearchRequest(question="Explain investing risks"), llm=synthetic_chat_model(
+        query_response={"search_queries": ["investing risks"], "is_personalized_advice_request": False},
+        synthesis_response=_synthetic_synthesis(statement=statement),
+    ), search_provider=synthetic_search_provider(results=synthetic_results))
+    assert not result.findings
+    assert any(item.code == "no_verified_findings" for item in result.limitations)
+
+
+def test_model_quota_failure_explained_once_without_blame_or_secret_leak(
+    settings_with_synthetic_official_domain, synthetic_search_provider,
+    synthetic_results, synthetic_chat_model,
+):
+    class QuotaError(RuntimeError):
+        status_code = 429
+    result = run_financial_research(ResearchRequest(question="Explain emergency funds"),
+        llm=synthetic_chat_model(error=QuotaError("PRIVATE_PROVIDER_ERROR")),
+        search_provider=synthetic_search_provider(results=synthetic_results))
+    assert result.status == AgentStatus.partial
+    assert result.sources
+    assert [item.code for item in result.limitations] == ["synthesis_unavailable"]
+    assert "quota" in result.limitations[0].message
+    assert "PRIVATE_PROVIDER_ERROR" not in result.model_dump_json()
+
+
+def test_relevant_source_precedes_unrelated_official_result():
+    from finagent.agents.financial_research.search import RawSearchResult
+    from finagent.agents.financial_research.source_ranking import rank_and_dedupe_sources
+    sources=rank_and_dedupe_sources([
+        RawSearchResult(title="Unrelated official page",url="https://rbi.org.in/unrelated",content="TEST FIXTURE",score=0.1),
+        RawSearchResult(title="Relevant SIP guide",url="https://example.invalid/sip",content="TEST FIXTURE",score=0.95),
+    ],official_domains=["rbi.org.in"],max_sources=1)
+    assert sources[0].title=="Relevant SIP guide"
+
+
+def test_personal_budget_guidance_survives_verification_and_context_stays_out_of_search(
+    settings_with_synthetic_official_domain, synthetic_search_provider,
+    synthetic_results, synthetic_chat_model,
+):
+    from finagent.agents.financial_research.prompts import conversational_question, synthesis_prompt
+    from finagent.schemas.research import ResearchFinancialContext
+    request = ResearchRequest(question="How can I build an emergency fund?", financial_context=ResearchFinancialContext(
+        data_notes=["PRIVATE_CONTEXT_SENTINEL"],
+    ))
+    assert "PRIVATE_CONTEXT_SENTINEL" not in conversational_question(request)
+    assert "PRIVATE_CONTEXT_SENTINEL" in synthesis_prompt(request.question, [], request.financial_context.model_dump())
+    provider = synthetic_search_provider(results=synthetic_results)
+    result = run_financial_research(request, llm=synthetic_chat_model(
+        query_response={"search_queries": ["emergency fund saving guide"], "is_personalized_advice_request": False},
+        synthesis_response=_synthetic_synthesis(statement="You should set aside part of your monthly surplus for emergencies."),
+    ), search_provider=provider)
+    assert len(result.findings) == 1
+    assert not any(item.code == "personalized_advice_reframed" for item in result.limitations)
+    assert "PRIVATE_CONTEXT_SENTINEL" not in str(provider.calls)

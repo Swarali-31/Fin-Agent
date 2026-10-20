@@ -14,6 +14,10 @@ vi.mock("../services/profiles.js", () => ({
   uploadTransactionsCsv: vi.fn(),
   getProfileSummary: vi.fn(),
   getLatestExpenseAnalysis: vi.fn(),
+  getTransactions: vi.fn().mockResolvedValue({ transactions: [] }),
+  previewTransactionsCsv: vi.fn(),
+  correctTransaction: vi.fn(),
+  updateTransactionSelection: vi.fn(),
 }));
 vi.mock("../services/budgets.js", () => ({
   listBudgets: vi.fn(),
@@ -22,7 +26,7 @@ vi.mock("../services/budgets.js", () => ({
 
 import { createBudget, reviseBudget, runExpenseAnalysis } from "../services/agents.js";
 import { getBudgetHistory, listBudgets } from "../services/budgets.js";
-import { getLatestExpenseAnalysis } from "../services/profiles.js";
+import { getLatestExpenseAnalysis, getTransactions, updateTransactionSelection } from "../services/profiles.js";
 
 const analysisFixture = {
   agent: "expense_analysis",
@@ -89,11 +93,47 @@ const budgetFixture = {
 beforeEach(() => {
   localStorage.clear();
   vi.resetAllMocks();
+  getTransactions.mockResolvedValue({ transactions: [] });
 });
 
 afterEach(cleanup);
 
+it("shows uploaded files after loading saved data and filters their transactions", async () => {
+  localStorage.setItem("finagent.profileId", "TEST files");
+  getLatestExpenseAnalysis.mockRejectedValue({ status: 404, code: "analysis_not_found" });
+  getTransactions.mockResolvedValue({
+    currency: "INR",
+    transactions: [
+      { id: "food", date: "2026-10-01", description: "TEST food", type: "expense", amount: { amount: "100.00" } },
+      { id: "rent", date: "2026-10-02", description: "TEST rent", type: "expense", amount: { amount: "200.00" } },
+    ],
+    imports: [{ id: "batch", filename: "October.csv", format: "csv", imported_at: "2026-10-20T10:00:00Z", transaction_count: 1, transaction_ids: ["food"], period_start: "2026-10-01", period_end: "2026-10-01" }],
+  });
+  render(<ExpenseAnalysis />);
+  const openFile = await screen.findByRole("button", { name: "View transactions for October.csv" });
+  expect(screen.getByRole("button", { name: "Edit TEST rent" })).toBeTruthy();
+  fireEvent.click(openFile);
+  expect(screen.getByRole("button", { name: "Edit TEST food" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Edit TEST rent" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Filter by uploaded file"), { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "Edit TEST rent" })).toBeTruthy();
+  expect(screen.getByText(/original filenames were not stored/)).toBeTruthy();
+});
+
 describe("Expense Analysis page", () => {
+  it("reruns saved transactions and displays AI spending insights", async () => {
+    localStorage.setItem("finagent.profileId", "TEST FIXTURE: saved-profile");
+    getTransactions.mockResolvedValue({ transactions: [{ id: "stored-row", transaction: { id: "stored-row", date: "2026-10-01", description: "TEST FIXTURE", type: "expense", amount: { amount: "20.00" } } }] });
+    getLatestExpenseAnalysis.mockResolvedValue({ result: analysisFixture });
+    runExpenseAnalysis.mockResolvedValue({ status: "success", result: { ...analysisFixture, spending_patterns: [{ title: "TEST FIXTURE: housing pattern", detail: "Housing is a regular part of your spending." }] } });
+    render(<ExpenseAnalysis />);
+    const button = await screen.findByRole("button", { name: "Analyze saved transactions" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    expect(await screen.findByText("Housing is a regular part of your spending.")).toBeTruthy();
+    expect(runExpenseAnalysis).toHaveBeenCalledWith({ profile_id: "TEST FIXTURE: saved-profile" });
+  });
+
   it("shows loading while an existing analysis is fetched", () => {
     localStorage.setItem("finagent.profileId", "TEST FIXTURE: profile");
     getLatestExpenseAnalysis.mockReturnValue(new Promise(() => {}));
@@ -109,7 +149,7 @@ describe("Expense Analysis page", () => {
       status: 503,
     }));
     render(<ExpenseAnalysis />);
-    expect(await screen.findByText(/503 persistence_not_configured/)).toBeTruthy();
+    expect(await screen.findByText(/workspace is unavailable/i)).toBeTruthy();
   });
 
   it("runs analysis and renders returned totals, warnings, and version", async () => {
@@ -120,7 +160,7 @@ describe("Expense Analysis page", () => {
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "3000.00" } });
     fireEvent.change(screen.getByLabelText("Transaction type"), { target: { value: "income" } });
     fireEvent.click(screen.getByRole("button", { name: "Add transaction" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run analysis" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and analyze" }));
 
     expect(await screen.findByText("$3,000.00")).toBeTruthy();
     expect(screen.getByText("Analysis partial")).toBeTruthy();
@@ -148,7 +188,7 @@ describe("Expense Analysis page", () => {
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "3000.00" } });
     fireEvent.change(screen.getByLabelText("Transaction type"), { target: { value: "income" } });
     fireEvent.click(screen.getByRole("button", { name: "Add transaction" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run analysis" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and analyze" }));
 
     expect(await screen.findByText("Server rejected transaction rows")).toBeTruthy();
     expect(screen.getByText("amount: must be positive")).toBeTruthy();
@@ -173,7 +213,7 @@ describe("Budget Planning page", () => {
     }));
     listBudgets.mockResolvedValue({ items: [] });
     render(<BudgetPlanning />);
-    expect(await screen.findByText(/Budget creation and history require DATABASE_URL/)).toBeTruthy();
+    expect(await screen.findByText(/workspace is unavailable/i)).toBeTruthy();
   });
 
   it("shows budget feasibility, allocation, stale status and supports revision", async () => {
@@ -211,10 +251,43 @@ describe("Budget Planning page", () => {
 
     expect(await screen.findByText("$3,000.00")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Monthly savings goal"), { target: { value: "500.00" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create budget" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create my budget" }));
     await waitFor(() => expect(createBudget).toHaveBeenCalledWith(expect.objectContaining({
       expense_analysis: analysisFixture,
       savings_goal: { monthly_target: { amount: "500.00" } },
     }), "TEST FIXTURE: profile"));
   });
+});
+
+
+it("deletes only selected saved rows and allows undo", async () => {
+  localStorage.setItem("finagent.profileId", "TEST FIXTURE: profile");
+  getLatestExpenseAnalysis.mockResolvedValue(analysisFixture);
+  const row = {id:"rent", date:"2026-08-02", description:"TEST FIXTURE rent", amount:{amount:"20000"}, type:"expense"};
+  getTransactions.mockResolvedValueOnce({transactions:[row]}).mockResolvedValueOnce({transactions:[]}).mockResolvedValueOnce({transactions:[row]});
+  updateTransactionSelection.mockResolvedValue({updated:1});
+  render(<ExpenseAnalysis />);
+  const select = await screen.findByLabelText("Select all saved transactions");
+  await waitFor(() => expect(screen.getByLabelText("Select TEST FIXTURE rent 2026-08-02 rent")).toBeTruthy());
+  fireEvent.click(screen.getByText(/Your saved transactions \(1\)/));
+  fireEvent.click(select);
+  fireEvent.click(screen.getByRole("button",{name:"Delete selected (1)"}));
+  const undo = await screen.findByRole("button",{name:"Undo deletion (1)"});
+  expect(updateTransactionSelection).toHaveBeenCalledWith("TEST FIXTURE: profile",["rent"],true);
+  fireEvent.click(undo);
+  await waitFor(() => expect(updateTransactionSelection).toHaveBeenCalledWith("TEST FIXTURE: profile",["rent"],false));
+});
+
+it("includes separate budget runs in history and keeps older versions read-only", async () => {
+  localStorage.setItem("finagent.profileId", "TEST FIXTURE: profile");
+  getLatestExpenseAnalysis.mockResolvedValue(analysisFixture);
+  const latest = {...budgetFixture, budget_id:"latest", revision:3};
+  const older = {...budgetFixture, budget_id:"older", revision:1};
+  listBudgets.mockResolvedValue({items:[{result:latest},{result:older}]});
+  getBudgetHistory.mockResolvedValue([latest]);
+  render(<BudgetPlanning />);
+  fireEvent.click(await screen.findByRole("button",{name:"View revision 1"}));
+  expect(screen.getByRole("button",{name:"Recalculate budget"}).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button",{name:"Return to latest budget"}));
+  expect(screen.getByRole("button",{name:"Recalculate budget"}).disabled).toBe(false);
 });

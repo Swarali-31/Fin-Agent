@@ -6,4 +6,5 @@ export const getReport = (reportId) =>
 export const downloadReport = (reportId, format = "json") =>
   request(
     `/reports/${encodeURIComponent(reportId)}/download${queryString({ format })}`,
+    format === "pdf" ? { responseType: "blob" } : {},
   );

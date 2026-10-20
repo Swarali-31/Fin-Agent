@@ -11,7 +11,7 @@ import { listResearch } from "../services/research.js";
 import { downloadReport, listReports } from "../services/reports.js";
 
 const PROFILE_KEY = "finagent.profileId";
-const REPORT_FORMATS = ["json", "markdown"];
+const REPORT_FORMATS = ["pdf", "json", "markdown"];
 
 function storedProfile() {
   try {
@@ -51,6 +51,11 @@ function reportRecordValue(record) {
 }
 
 function downloadFile(data, format) {
+  if (format === "pdf") {
+    const url = URL.createObjectURL(data);
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = "FinAgent-Report.pdf"; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000); return;
+  }
   const content = format === "json" ? JSON.stringify(data.content, null, 2) : data.content;
   const mimeType = format === "json" ? "application/json" : "text/markdown";
   const url = URL.createObjectURL(new Blob([content], { type: `${mimeType};charset=utf-8` }));
@@ -93,7 +98,7 @@ export default function Reports() {
   const [loadingInputs, setLoadingInputs] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [format, setFormat] = useState("markdown");
+  const [format, setFormat] = useState("pdf");
   const [error, setError] = useState(null);
   const [historyError, setHistoryError] = useState(null);
   const [inputNotice, setInputNotice] = useState("");
@@ -238,10 +243,12 @@ export default function Reports() {
       <section>
         <h1 className="page-title">Reports</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Validate the latest analysis and budget before composing a consolidated report.
+          Bring your spending analysis and budget together in a report. Your saved results are checked before the report is generated.
         </p>
       </section>
 
+      <div className="flex flex-wrap gap-4 text-xs text-slate-500"><a className="text-brand-blue" href="/expense-analysis">1. Add and analyze expenses →</a><a className="text-brand-blue" href="/budget-planning">2. Create your budget →</a><a className="text-brand-blue" href="/reports">3. Generate a report</a></div>
+      <details className="profile-settings"><summary>Change financial profile</summary>
       <form className="surface-card flex flex-wrap items-end gap-3" onSubmit={selectProfile}>
         <label className="min-w-56 flex-1 text-xs font-semibold text-slate-600">
           Profile ID
@@ -256,6 +263,7 @@ export default function Reports() {
           Load profile
         </button>
       </form>
+      </details>
 
       {loadingInputs && <Loading label="Loading latest analysis, budget, and report history" />}
       {error && <ErrorState title="Report request failed" message={errorText(error)} />}
@@ -314,10 +322,10 @@ export default function Reports() {
                 />
               </div>
               {report.validation_summary && (
-                <p className="mt-3 text-sm text-slate-700">{report.validation_summary}</p>
+                <p className="mt-3 text-sm text-slate-700">{validationStatus === "valid" ? "Inputs checked." : validationStatus === "rejected" ? report.validation_summary : `${report.validation_issues?.length || 0} items need review.`}</p>
               )}
               {report.validation_issues?.length ? (
-                <ul className="mt-3 space-y-2">
+                <details className="mt-3"><summary className="cursor-pointer text-sm">Review issues ({report.validation_issues.length})</summary><ul className="mt-3 space-y-2">
                   {report.validation_issues.map((issue, index) => (
                     <li className="rounded border border-current/10 p-3 text-sm" key={`${issue.code}-${index}`}>
                       <div className="flex flex-wrap gap-2">
@@ -327,7 +335,7 @@ export default function Reports() {
                       <p className="mt-1">{issue.message}</p>
                     </li>
                   ))}
-                </ul>
+                </ul></details>
               ) : validationStatus !== "valid" ? (
                 <p className="mt-3 text-sm text-slate-600">No issue details were included in the response.</p>
               ) : null}
@@ -345,9 +353,10 @@ export default function Reports() {
             <>
               <section className="surface-card">
                 <h2 className="text-base font-semibold text-slate-800">Summary</h2>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{sections.summary}</p>
-                {report.report_version && <p className="mt-3 break-all font-mono text-xs text-slate-500">Report version: {report.report_version}</p>}
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{sections.summary?.length > 360 ? `${sections.summary.slice(0,360)}…` : sections.summary}</p>
+
               </section>
+<details className="space-y-5"><summary className="surface-card cursor-pointer font-semibold">View full report</summary>{sections.summary?.length > 360 && <section className="surface-card"><h2 className="font-semibold">Full summary</h2><p className="mt-3 whitespace-pre-wrap text-sm leading-6">{sections.summary}</p></section>}
               <TextList title="Spending insights" items={sections.spending_insights} />
               <section className="surface-card">
                 <h2 className="text-base font-semibold text-slate-800">Budget overview</h2>
@@ -399,7 +408,7 @@ export default function Reports() {
                   </dl>
                 </section>
               )}
-            </>
+            </details></>
           ) : validationStatus !== "rejected" && (
             <Warning title="Report sections unavailable" message="The report result did not include sections; none have been inferred." />
           )}

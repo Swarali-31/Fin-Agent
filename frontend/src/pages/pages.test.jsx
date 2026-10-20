@@ -9,6 +9,8 @@ vi.mock("../services/agents.js", () => ({ listAgents: vi.fn() }));
 vi.mock("../services/budgets.js", () => ({ listBudgets: vi.fn() }));
 vi.mock("../services/profiles.js", () => ({
   createSampleData: vi.fn(),
+  createProfile: vi.fn(),
+  listProfiles: vi.fn().mockResolvedValue([]),
   getProfileSummary: vi.fn(),
 }));
 vi.mock("../services/workflows.js", () => ({
@@ -149,6 +151,7 @@ describe("Dashboard", () => {
 
 describe("Master Agent", () => {
   it("shows loading while polling a running workflow", async () => {
+    localStorage.setItem("finagent.profileId", "TEST FIXTURE: profile");
     createWorkflow.mockResolvedValue({ run_id: "TEST FIXTURE: run" });
     getWorkflow.mockReturnValue(new Promise(() => {}));
     getWorkflowTrace.mockResolvedValue([]);
@@ -160,6 +163,7 @@ describe("Master Agent", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     expect(await screen.findByText("Workflow is running; refreshing status and trace…")).toBeTruthy();
+    expect(createWorkflow).toHaveBeenCalledWith({ task: "Research emergency funds", context: { profile_id: "TEST FIXTURE: profile" } });
   });
 
   it("shows create-workflow errors, including persistence configuration failures", async () => {
@@ -174,7 +178,7 @@ describe("Master Agent", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    expect(await screen.findByText(/Workflow runs and polling require DATABASE_URL/)).toBeTruthy();
+    expect(await screen.findByText(/workspace is unavailable/i)).toBeTruthy();
   });
 
   it("renders the plan, fallback trace, answer, provenance, and sources", async () => {

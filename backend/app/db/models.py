@@ -37,8 +37,26 @@ class Base(DeclarativeBase):
     type_annotation_map = {dict[str, Any]: JSON}
 
 
+class UserRecord(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(254), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+
+
+class SessionRecord(Base):
+    __tablename__ = "auth_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProfileRecord(Base):
     __tablename__ = "profiles"
+
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
@@ -123,6 +141,8 @@ class BudgetRecord(Base):
 
 class ResearchRunRecord(Base):
     __tablename__ = "research_runs"
+
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
     __table_args__ = (Index("ix_research_runs_profile_created", "profile_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -151,6 +171,8 @@ class ReportRecord(Base):
 
 class WorkflowRunRecord(Base):
     __tablename__ = "workflow_runs"
+
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), index=True)
     __table_args__ = (Index("ix_workflow_runs_profile_created", "profile_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

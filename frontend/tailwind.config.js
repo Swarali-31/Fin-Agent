@@ -5,12 +5,12 @@ export default {
     extend: {
       colors: {
         brand: {
-          blue: "#072f5fe8",
+          blue: "#047857",
           green: "#059669",
         },
-        surface: "#F5F7FA",
-        border: "#E2E8F0",
-        ink: "#172B3A",
+        surface: "#fafaf5",
+        border: "#e2e8f0",
+        ink: "#0f172a",
         muted: "#64748B",
       },
       fontFamily: {

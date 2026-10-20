@@ -17,6 +17,9 @@ def create_database_engine(database_url: str) -> Engine:
                 "poolclass": StaticPool,
             }
         )
+    if database_url.startswith("postgresql"):
+        options.update(pool_size=5, max_overflow=5, pool_recycle=300,
+                       connect_args={"connect_timeout": 10, "prepare_threshold": None})
     return create_engine(database_url, **options)
 
 

@@ -17,6 +17,14 @@ from backend.app.orchestrator.planning import ProposedPlan, deterministic_plan
 from backend.app.schemas.common import AgentEnvelope, AgentProvenance, AdapterStatus
 
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def isolate_workflows_from_live_database(monkeypatch):
+    # Synthetic unit runs must never use a developer's configured cloud database.
+    monkeypatch.setattr("backend.app.orchestrator.graph.get_repository", lambda **kwargs: None)
+
+
 def _async_test(function: Any) -> Any:
     def run(*args: Any, **kwargs: Any) -> Any:
         return asyncio.run(function(*args, **kwargs))
@@ -485,3 +493,58 @@ async def test_missing_profile_returns_structured_error() -> None:
     assert result.errors[0].code == "missing_input"
     assert result.status == "failed"
     assert not result.results
+
+
+@_async_test
+async def test_budget_reuses_only_current_saved_analysis():
+    from finagent.sample_data import sample_profile
+    from finagent.agents.expense_analysis.calculations import compute_expense_metrics
+    from finagent.schemas.expense import ExpenseAnalysisResult
+    profile=sample_profile()
+    metrics=compute_expense_metrics(profile)
+    saved=ExpenseAnalysisResult(status='success',analysis_version=metrics.analysis_version,summary=metrics.summary).model_dump(mode='json')
+    expense=FakeAdapter('expense_analysis',[saved])
+    budget=FakeAdapter('budget_planning',[budget_result(metrics.analysis_version)])
+    result=await run_workflow('Create a monthly budget',{'profile':profile.model_dump(mode='json'),'cached_expense_analysis':saved},adapters=adapters(overrides={'expense_analysis':expense,'budget_planning':budget}),llm=False)
+    assert expense.calls==[]
+    assert budget.calls[0]['input']['expense_analysis']['analysis_version']==metrics.analysis_version
+    stale={**saved,'analysis_version':'ea-stale-saved'}
+    expense=FakeAdapter('expense_analysis',[saved])
+    await run_workflow('Create a monthly budget',{'profile':profile.model_dump(mode='json'),'cached_expense_analysis':stale},adapters=adapters(overrides={'expense_analysis':expense,'budget_planning':FakeAdapter('budget_planning',[budget_result(metrics.analysis_version)])}),llm=False)
+    assert len(expense.calls)==1
+
+
+def test_planner_prompt_names_exact_specialist_input_contracts():
+    from backend.app.orchestrator.planning import plan_prompt
+    import json
+    prompt = json.loads(plan_prompt("Generate a report", {"profile": {"profile_id":"TEST", "transactions":[]}}))
+    contract = prompt["input_reference_contract"]
+    assert contract["expense_analysis"] == {"profile":"context.profile"}
+    assert "expense_analysis" in contract["budget_planning"]
+    assert contract["financial_research"] == {"question":"task"}
+    assert {"expense_analysis","budget","research"} == set(contract["financial_report"])
+
+
+@_async_test
+async def test_literal_research_question_is_bound_to_user_task_then_validated():
+    registry=adapters()
+    result=await run_workflow("Explain SIP investing", adapters=registry,
+        llm=FakeLLM({"steps":[{"id":"research_1","agent":"financial_research","input_refs":{"question":"Explain SIP investing"}}]}))
+    assert result.status=="success"
+    assert registry["financial_research"].calls[0]["input"]["question"]=="Explain SIP investing"
+
+
+def test_financial_questions_route_to_real_research_without_command_keywords():
+    for question in ["If I want to invest in SIP tell me what to do", "What is a budget?", "How does compound interest work?"]:
+        plan=deterministic_plan(question,{})
+        assert [step.agent for step in plan.steps]==["financial_research"]
+        assert plan.steps[0].input_refs=={"question":"task"}
+
+
+def test_research_step_receives_server_financial_context():
+    from backend.app.orchestrator.graph import _resolve_step_input
+    from backend.app.orchestrator.schemas import PlanStep, WorkflowState
+    financial_context = {"data_notes": ["TEST FIXTURE: saved summary"]}
+    state = WorkflowState(task="Help me save", context={"research_financial_context": financial_context})
+    step = PlanStep(id="research", agent="financial_research", input_refs={"question": "task"})
+    assert _resolve_step_input(step, state)["financial_context"] == financial_context

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { createWorkflow, getWorkflow, getWorkflowTrace } from "../services/workflows.js";
+import { createWorkflow, getWorkflow, getWorkflowTrace, listWorkflows } from "../services/workflows.js";
+import { useSearchParams } from "react-router-dom";
 import { ApiError } from "../services/api.js";
 import { Empty, ErrorState, Loading, Warning } from "../components/StateViews.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
@@ -22,7 +23,7 @@ function isTerminal(workflow) {
 
 function errorMessage(error) {
   if (error instanceof ApiError && error.code === "persistence_not_configured") {
-    return "The server returned 503 persistence_not_configured. Workflow runs and polling require DATABASE_URL.";
+    return "Your saved workspace is unavailable. Ask the workspace owner to check the database connection.";
   }
   return error instanceof Error ? error.message : "The workflow request failed.";
 }
@@ -113,9 +114,19 @@ function timelineLabel(event) {
 }
 
 export default function MasterAgent() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [recentRuns, setRecentRuns] = useState([]);
   const [task, setTask] = useState("");
-  const [contextText, setContextText] = useState("");
-  const [runId, setRunId] = useState("");
+  const [profileId, setProfileId] = useState(() => storedValue("finagent.profileId"));
+  const [savingsTarget, setSavingsTarget] = useState("");
+  const [runId, setRunId] = useState(() => searchParams.get("run") || "");
+  useEffect(() => {
+    let active = true;
+    listWorkflows({page:1,page_size:10}).then((data) => { if (active) setRecentRuns(data?.items || []); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  function viewRun(id) { setRunId(id); setSearchParams(id ? {run:id} : {}, {replace:true}); }
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const polling = usePolling(runId);
@@ -126,46 +137,22 @@ export default function MasterAgent() {
   const intermediateResults = result?.results ?? {};
   const errors = result?.errors ?? [];
   const sources = sourceList(result);
-  const contextParseError = contextText.trim()
-    ? (() => {
-        try {
-          const parsed = JSON.parse(contextText);
-          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? null
-            : "Context must be a JSON object.";
-        } catch {
-          return "Context must be valid JSON.";
-        }
-      })()
-    : null;
-
   const submitTask = useCallback(async (event) => {
     event.preventDefault();
     setSubmitError(null);
     if (!task.trim()) return;
-    let context = {};
-    if (contextText.trim()) {
-      try {
-        context = JSON.parse(contextText);
-      } catch {
-        setSubmitError(new Error("Context must be valid JSON."));
-        return;
-      }
-      if (!context || typeof context !== "object" || Array.isArray(context)) {
-        setSubmitError(new Error("Context must be a JSON object."));
-        return;
-      }
-    }
+    const context = profileId.trim() ? { profile_id: profileId.trim() } : {};
+    if (savingsTarget.trim()) context.savings_goal = { monthly_target: { amount: savingsTarget } };
     setSubmitting(true);
     try {
       const response = await createWorkflow({ task: task.trim(), context });
-      setRunId(response.run_id);
+      viewRun(response.run_id);
     } catch (error) {
       setSubmitError(error);
     } finally {
       setSubmitting(false);
     }
-  }, [contextText, task]);
+  }, [profileId, task, savingsTarget]);
 
   const claims = result?.claims ?? [];
   const fallbackSelected = plan?.source === "deterministic_fallback" ||
@@ -181,10 +168,12 @@ export default function MasterAgent() {
       <section>
         <h1 className="page-title">Master Agent</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Describe a task. The workflow planner selects specialist agents and reports their actual outputs.
+          Tell FinAgent what you need. It reads your selected profile, chooses the required agents, and shows their results.
         </p>
       </section>
 
+      <section className="surface-card space-y-2"><h2 className="font-semibold">How it works</h2><ol className="list-decimal list-inside text-sm space-y-2"><li>Expense Analysis reads your saved transactions and adds up income and spending.</li><li>Budget Planning uses that analysis and your savings target to suggest spending limits.</li><li>Financial Research searches the web and includes links to its sources. It can run without a profile.</li><li>Financial Report checks the available results and combines them into a downloadable report.</li></ol><p className="text-sm">Only the agents needed for your request run. The execution trace shows what completed, what failed, and why. Changed transactions require a fresh analysis and budget.</p></section>
+      {recentRuns.length > 0 && <label className="block text-sm">Previous requests<select aria-label="Previous requests" value={runId} onChange={(event) => viewRun(event.target.value)} className="mt-2 block w-full rounded-md border border-slate-300 p-3"><option value="">Choose a previous request</option>{recentRuns.map((run) => <option value={run.run_id} key={run.run_id}>{run.input?.task || "Saved request"} · {new Date(run.started_at).toLocaleString()}</option>)}</select></label>}
       <form className="surface-card space-y-4" onSubmit={submitTask}>
         <label className="block text-sm font-semibold text-slate-700" htmlFor="workflow-task">
           What would you like FinAgent to do?
@@ -197,39 +186,25 @@ export default function MasterAgent() {
             required
           />
         </label>
-        <details>
-          <summary className="cursor-pointer text-sm font-semibold text-brand-blue">
-            Optional workflow context (JSON)
-          </summary>
-          <label className="mt-3 block text-sm text-slate-600" htmlFor="workflow-context">
-            Financial workflows require <code>context.profile</code> with profile_id, currency, and transactions.
-            <textarea
-              id="workflow-context"
-              className="mt-2 min-h-36 w-full rounded-md border border-slate-300 bg-white px-3 py-3 font-mono text-xs outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-100"
-              value={contextText}
-              onChange={(event) => setContextText(event.target.value)}
-              placeholder={'{"profile":{"profile_id":"...","currency":"INR","transactions":[...]}}'}
-              spellCheck={false}
-            />
-          </label>
-          {contextParseError && <p className="mt-2 text-sm text-red-700">{contextParseError}</p>}
-          {storedValue(SAMPLE_PROFILE_STORAGE_KEY) && (
-            <p className="mt-2 text-xs text-slate-500">
-              A sample profile is selected in this browser, but its transactions cannot be fetched through the current API. Supply a complete <code>context.profile</code> object to run financial tasks.
-            </p>
-          )}
-        </details>
+        <p className="text-sm text-slate-500">Your saved income and expenses are included automatically. Research questions can run independently.</p>
+        <label className="block text-sm font-semibold">Monthly savings target (optional)<input type="number" min="0.01" step="0.01" value={savingsTarget} onChange={(event) => setSavingsTarget(event.target.value)} className="mt-2 block rounded-md border border-slate-300 px-3 py-2" /></label>
+        <p className="text-sm text-slate-500">Enter a target here when asking for a budget. If blank, the budget agent uses its default target and shows its assumptions.</p>
+        <div className="flex flex-wrap gap-2">{["Analyze my spending and create a budget", "Generate a financial report", "Research how emergency funds work"].map((goal) => <button type="button" key={goal} className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600" onClick={() => setTask(goal)}>{goal}</button>)}</div>
+        <details className="profile-settings"><summary>Change financial profile</summary><input aria-label="Financial profile" value={profileId} onChange={(event) => setProfileId(event.target.value)} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></details>
+        {profileId && storedValue(SAMPLE_PROFILE_STORAGE_KEY) === profileId && <StatusBadge status="info" label="Sample data" />}
         {submitError && (
           <ErrorState title="Workflow could not be started" message={errorMessage(submitError)} />
         )}
         <button
           className="rounded-md bg-brand-blue px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           type="submit"
-          disabled={submitting || !task.trim() || Boolean(contextParseError)}
+          disabled={submitting || !task.trim()}
         >
           {submitting ? "Starting workflow…" : "Run"}
         </button>
       </form>
+
+      {runId && <section className="surface-card"><h2 className="font-semibold">Your request, step by step</h2><ol className="mt-3 space-y-2 text-sm"><li>1. Understanding your request {workflow ? "✓" : "…"}</li><li>2. Preparing your financial data {profileId ? (polling.trace.some((event) => event.type === "agent_call" || event.type === "validation") ? "✓" : "…") : "— research does not need a financial profile"}</li><li>3. Running the required agents {polling.loading ? "…" : workflow?.status === "failed" ? "— needs attention" : result ? "✓" : "…"}</li><li>4. Preparing your results {result?.final_answer ? "✓" : "…"}</li><li>5. {workflow?.status === "success" ? "Completed" : workflow?.status === "partial" || workflow?.status === "failed" ? "Needs attention — read the notes below" : "Working on it"}</li></ol></section>}
 
       {polling.error && (
         <ErrorState title="Workflow status unavailable" message={errorMessage(polling.error)} />
@@ -249,8 +224,15 @@ export default function MasterAgent() {
             <StatusBadge status={workflow.status ?? "running"} />
           </section>
 
+          {result?.final_answer && (
+            <section className="surface-card">
+              <h2 className="text-base font-semibold text-slate-800">Your results</h2>
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{result.final_answer}</p>
+            </section>
+          )}
+
           {fallbackSelected && (
-            <Warning title="Deterministic fallback planner" message="The workflow used deterministic_fallback rather than an LLM-generated plan." />
+            <Warning title="Standard workflow" message="FinAgent used its standard workflow rules for this request. The selected agents still processed your actual data." />
           )}
           {workflow.status === "partial" && (
             <Warning title="Workflow completed partially" message="Some requested agent work did not complete. Review the plan, trace, and errors before relying on the result." />
@@ -259,9 +241,10 @@ export default function MasterAgent() {
             <Warning title="Workflow limit reached" message="The workflow stopped at a configured step or replan limit. See the errors below for the exact limit and details." />
           )}
           {workflow.status === "failed" && (
-            <ErrorState title="Workflow failed" message={result?.final_answer ?? "No specialist result was produced."} />
+            <ErrorState title="Workflow failed" message={result?.final_answer ?? "No result could be completed. Check the note below and try again."} />
           )}
 
+          <details className="surface-card"><summary className="cursor-pointer font-semibold">Detailed workflow and execution trace</summary><div className="mt-4 space-y-4">
           <section className="surface-card">
             <div className="card-heading">
               <div>
@@ -365,17 +348,14 @@ export default function MasterAgent() {
             )}
           </section>
 
-          {result?.final_answer && (
-            <section className="surface-card">
-              <h2 className="text-base font-semibold text-slate-800">Consolidated answer</h2>
-              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{result.final_answer}</p>
-            </section>
-          )}
+
+
+          </div></details>
 
           {(claims.length > 0 || sources.length > 0) && (
             <section className="grid gap-4 xl:grid-cols-2">
-              <section className="surface-card">
-                <h2 className="text-base font-semibold text-slate-800">Provenance</h2>
+              <details className="surface-card">
+                <summary className="cursor-pointer text-base font-semibold text-slate-800">How these results were checked</summary>
                 {claims.length ? (
                   <div className="mt-3 space-y-3">
                     {claims.map((claim, index) => (
@@ -389,7 +369,7 @@ export default function MasterAgent() {
                     ))}
                   </div>
                 ) : <Empty title="No provenance claims available" />}
-              </section>
+              </details>
               <section className="surface-card">
                 <h2 className="text-base font-semibold text-slate-800">Sources</h2>
                 {sources.length ? (

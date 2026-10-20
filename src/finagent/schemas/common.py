@@ -124,6 +124,8 @@ class ExpenseCategory(str, Enum):
 class TransactionType(str, Enum):
     income = "income"
     expense = "expense"
+    refund = "refund"
+    transfer = "transfer"
 
 
 class AgentName(str, Enum):

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     llm_provider: str | None = Field(default=None, alias="LLM_PROVIDER")
     llm_model: str | None = Field(default=None, alias="LLM_MODEL")
+    llm_fallback_model: str | None = Field(default=None, alias="LLM_FALLBACK_MODEL")
     llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
 
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")

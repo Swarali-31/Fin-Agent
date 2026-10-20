@@ -174,7 +174,8 @@ def _create_graph(runtime: _Runtime) -> Any:
             runtime.record(state, "error", str(exc), details={"code": exc.code, **exc.details})
             state.terminated = True
         except Exception as exc:
-            # A planner invocation failure uses the deterministic fallback.
+            # A planner invocation failure uses the existing real-agent fallback.
+            runtime.record(state, "validation", "AI planning was unavailable; preparing a standard specialist route.", details={"planner_error_type": type(exc).__name__, "provider_status": str(getattr(exc, "code", getattr(exc, "status_code", "")))})
             try:
                 state.plan = deterministic_plan(state.task, state.context)
                 runtime.record(
@@ -451,7 +452,15 @@ def _default_adapters(settings: Settings | None = None) -> dict[str, AgentAdapte
 async def _get_proposed_plan(llm: Any, state: WorkflowState) -> ProposedPlan:
     structured = llm.with_structured_output(ProposedPlan)
     response = await _maybe_await(structured.ainvoke(plan_prompt(state.task, state.context)))
-    return response if isinstance(response, ProposedPlan) else ProposedPlan.model_validate(response)
+    proposal = response if isinstance(response, ProposedPlan) else ProposedPlan.model_validate(response)
+    # Literal questions are a model formatting error, never an executable path.
+    # Bind them to the actual user task, then run every existing plan validator.
+    for step in proposal.steps:
+        if step.agent == "financial_research":
+            reference = step.input_refs.get("question", "")
+            if reference and reference != "task" and not reference.startswith(("context.", "result.")):
+                step.input_refs["question"] = "task"
+    return proposal
 
 
 async def _run_step(step: PlanStep, state: WorkflowState, runtime: _Runtime) -> None:
@@ -477,19 +486,33 @@ async def _run_step(step: PlanStep, state: WorkflowState, runtime: _Runtime) -> 
     context = runtime.agent_context(state)
     started = time.perf_counter()
     step.status = "running"
+    cached = state.context.get("cached_expense_analysis") if step.agent == "expense_analysis" and "analy" not in state.task.lower() else None
+    if cached:
+        try:
+            from finagent.schemas.expense import ExpenseAnalysisResult
+            from finagent.schemas.financial import FinancialProfile
+            from finagent.agents.expense_analysis.calculations import compute_expense_metrics
+            validated = ExpenseAnalysisResult.model_validate(cached)
+            metrics = compute_expense_metrics(FinancialProfile.model_validate(call_input["profile"]))
+            if validated.status.value != "success" or validated.analysis_version != metrics.analysis_version:
+                cached = None
+        except Exception:
+            cached = None
     while True:
         step.attempts += 1
         runtime.record(
             state,
-            "agent_call",
-            "Calling specialist adapter.",
+            "validation" if cached else "agent_call",
+            "Using your saved analysis; its transactions are unchanged." if cached else "Calling specialist adapter.",
             step_id=step.id,
             agent=step.agent,
             details={"attempt": step.attempts},
         )
         try:
             existing = state.results.get(step.id)
-            if (
+            if cached:
+                envelope = AgentEnvelope(agent=step.agent, status=validated.status.value, result=validated.model_dump(mode="json"), provenance=AgentProvenance(agent=step.agent, analysis_version=validated.analysis_version, input_hash=hashlib.sha256(json.dumps(_json_safe(call_input), sort_keys=True).encode()).hexdigest(), started_at=datetime.now(UTC), duration_ms=0))
+            elif (
                 step.agent == "budget_planning"
                 and existing is not None
                 and existing.result is not None
@@ -586,6 +609,8 @@ def _resolve_step_input(step: PlanStep, state: WorkflowState) -> dict[str, Any]:
             }
     elif step.agent == "financial_research":
         resolved["question"] = resolved.get("question", state.task)
+        if state.context.get("research_financial_context"):
+            resolved["financial_context"] = state.context["research_financial_context"]
     elif step.agent == "budget_planning":
         resolved.update(
             {
@@ -864,6 +889,7 @@ def _claim_paths(agent: str, result: dict[str, Any]) -> list[str]:
             ),
         ],
         "financial_research": [
+            "calculated_answer",
             *(
                 f"findings.{index}.{field}"
                 for index, _ in enumerate(result.get("findings", []))
@@ -901,11 +927,33 @@ def _deterministic_summary(state: WorkflowState, claims: list[ProvenanceClaim]) 
             if step.id in state.results
         )
         return f"No verified financial claims were produced. Specialist statuses: {statuses or 'none'}."
-    values = "; ".join(
-        f"{claim.agent}.{claim.field_path}={claim.value}"
-        for claim in claims
-    )
-    return f"Verified specialist outputs: {values}."
+    sentences = []
+    for step in state.plan.steps if state.plan else []:
+        envelope = state.results.get(step.id)
+        if not envelope or envelope.result is None or envelope.status == "failed":
+            sentences.append(f"{step.agent.replace('_', ' ').title()} could not finish. See the execution trace for the reason.")
+            continue
+        result = envelope.result
+        def amount(value):
+            return (value or {}).get("amount", "unavailable")
+        if step.agent == "expense_analysis":
+            summary = result.get("summary") or {}
+            sentences.append(f"Your monthly income is {amount(summary.get('monthly_income'))} {summary.get('currency', '')}. Your monthly expenses are {amount(summary.get('monthly_expenses'))}.")
+        elif step.agent == "budget_planning":
+            sentences.append(f"Your budget sets aside {amount(result.get('planned_monthly_savings'))} {result.get('currency', '')} each month. " + ("The savings target fits within your income." if result.get('feasibility', {}).get('is_feasible') else "The requested savings target needs changes; review the budget suggestions."))
+        elif step.agent == "financial_research":
+            findings = result.get("findings") or []
+            if result.get("calculated_answer"):
+                sentences.append(result["calculated_answer"])
+            else:
+                sentences.extend(str(item.get("statement", "")) for item in findings[:3])
+                sentences.append(f"Research returned {len(result.get('sources', []))} sources. Open the source links to read the evidence.")
+        elif step.agent == "financial_report":
+            sentences.append("Your report is ready in Reports. " + ("It includes warnings about missing information; review them before using it." if result.get("validation_status") == "flagged" else "The available inputs passed the report checks."))
+        if envelope.status == "partial" and step.agent != "financial_report":
+            sentences.append("Some information or features were unavailable. The results show only what could be verified.")
+    return "\n\n".join(sentences)
+
 
 
 def _workflow_status(state: WorkflowState) -> str:

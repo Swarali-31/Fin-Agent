@@ -106,3 +106,11 @@ def test_live_expense_analysis_smoke() -> None:
     result = run_expense_analysis({"profile": sample_profile().model_dump(mode="json")})
     assert result.status in (AgentStatus.success, AgentStatus.partial)
     assert result.summary is not None
+
+def test_provider_outage_has_safe_actionable_explanation():
+    class ProviderOutage(RuntimeError):
+        status_code = 503
+    result = run_expense_analysis({"profile": sample_profile().model_dump(mode="json")}, llm=FakeChatModel(error=ProviderOutage("private-key-must-not-leak")))
+    assert result.status == AgentStatus.partial
+    assert "temporarily unavailable" in result.limitations[0].message
+    assert "private-key" not in result.model_dump_json()

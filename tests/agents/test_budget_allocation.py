@@ -98,3 +98,14 @@ def test_floor_rate_is_configurable() -> None:
             assert allocation.limits[category] >= (current * Decimal("0.25")).quantize(
                 Decimal("0.01")
             )
+
+
+def test_unknown_expense_categories_are_not_silently_treated_as_flexible():
+    from finagent.schemas.expense import DataGap
+    analysis=_analysis()
+    analysis.summary.category_totals[ExpenseCategory.other]=Money(amount='1000')
+    analysis.data_gaps.append(DataGap(issue='missing_category',question='What is this cost?'))
+    allocation=baseline_allocation(BudgetRequest(expense_analysis=analysis,savings_goal={'monthly_target':{'amount':'30000'}}))
+    assert ExpenseCategory.other in allocation.essential_categories
+    assert allocation.limits[ExpenseCategory.other]==Decimal('1000.00')
+    assert any('Uncategorized spending' in text for text in allocation.assumptions)

@@ -98,6 +98,7 @@ class AgentAdapterBase:
         finagent_settings = FinAgentSettings(
             LLM_PROVIDER=self.settings.llm_provider,
             LLM_MODEL=self.settings.llm_model,
+            LLM_FALLBACK_MODEL=self.settings.llm_fallback_model,
             LLM_TEMPERATURE=self.settings.llm_temperature,
             ANTHROPIC_API_KEY=self.settings.anthropic_api_key,
             OPENAI_API_KEY=self.settings.openai_api_key,

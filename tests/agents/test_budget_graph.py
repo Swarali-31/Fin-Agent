@@ -235,3 +235,13 @@ def test_same_version_revision_retains_plan_and_adds_info_limitation() -> None:
     assert repeated.category_limits == previous.category_limits
     assert repeated.source_analysis_version == previous.source_analysis_version
     assert any(item.code == "revision_not_needed" for item in repeated.limitations)
+
+
+def test_changed_savings_goal_revises_even_when_analysis_is_unchanged():
+    analysis=_analysis()
+    previous=run_budget_planning(BudgetRequest(expense_analysis=analysis,savings_goal={'monthly_target':{'amount':'1000'}}),llm=False)
+    revised=revise_budget(previous,analysis,llm=False,savings_goal={'monthly_target':{'amount':'1500'}})
+    assert revised.revision==previous.revision+1
+    assert revised.revision_info.parent_budget_id==previous.budget_id
+    assert revised.feasibility.requested_monthly_savings.amount==Decimal('1500.00')
+    assert revised.budget_id!=previous.budget_id

@@ -10,22 +10,30 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext.jsx";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const navigation = [
   { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
-  { label: "Master Agent", to: "/master-agent", icon: Sparkles },
   { label: "Expense Analysis", to: "/expense-analysis", icon: BarChart3 },
   { label: "Budget Planning", to: "/budget-planning", icon: WalletCards },
   { label: "Financial Research", to: "/financial-research", icon: Search },
   { label: "Reports", to: "/reports", icon: FileText },
+  { label: "Master Agent", to: "/master-agent", icon: Sparkles },
 ];
 
 function currentTitle(pathname) {
-  return navigation.find((item) => item.to === pathname)?.label ?? "Dashboard";
+  return navigation.find((item) => item.to === pathname)?.label ?? (pathname === "/profile" ? "Profile" : "Dashboard");
 }
 
 export default function AppLayout() {
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const [signOutError, setSignOutError] = useState("");
+  async function leave() {
+    try { await signOut(); navigate("/", { replace: true }); }
+    catch { setSignOutError("Could not sign out. Please try again."); }
+  }
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
   const title = currentTitle(location.pathname);
@@ -93,13 +101,11 @@ export default function AppLayout() {
             <h2>{title}</h2>
           </div>
           <div className="topbar-right">
-            <span className="environment-label">Personal finance</span>
-            <div className="avatar" aria-label="User profile">
-              F
-            </div>
+            <div className="account-menu"><span>{user?.name}</span><button type="button" onClick={leave}>Sign out</button><NavLink to="/profile" className="avatar" aria-label="User profile">{user?.name?.slice(0,1).toUpperCase() || "F"}</NavLink></div>
           </div>
         </header>
         <main className="main-content">
+          {signOutError && <p role="alert">{signOutError}</p>}
           <Outlet />
         </main>
       </div>

@@ -1,5 +1,8 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import Landing from "./pages/Landing.jsx";
+import Auth from "./pages/Auth.jsx";
+import { RequireAuth } from "./auth/AuthContext.jsx";
 import AppLayout from "./layouts/AppLayout.jsx";
 import { Loading } from "./components/StateViews.jsx";
 
@@ -8,9 +11,11 @@ const MasterAgent = lazy(() => import("./pages/MasterAgent.jsx"));
 const ExpenseAnalysis = lazy(() => import("./pages/ExpenseAnalysis.jsx"));
 const BudgetPlanning = lazy(() => import("./pages/BudgetPlanning.jsx"));
 const FinancialResearch = lazy(() => import("./pages/FinancialResearch.jsx"));
+const Profile = lazy(() => import("./pages/Profile.jsx"));
 const Reports = lazy(() => import("./pages/Reports.jsx"));
 
 const pages = [
+  { path: "profile", title: "Profile", page: Profile },
   { path: "dashboard", title: "Dashboard", page: Dashboard },
   { path: "master-agent", title: "Master Agent", page: MasterAgent },
   { path: "expense-analysis", title: "Expense Analysis", page: ExpenseAnalysis },
@@ -32,8 +37,12 @@ function PageStub({ title }) {
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/login" element={<Auth key="login" mode="login" />} />
+      <Route path="/signup" element={<Auth key="signup" mode="signup" />} />
+      <Route element={<RequireAuth />}>
       <Route element={<AppLayout />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
+
         {pages.map((page) => {
           const Page = page.page;
           return (
@@ -53,6 +62,7 @@ export default function App() {
           );
         })}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Route>
       </Route>
     </Routes>
   );
