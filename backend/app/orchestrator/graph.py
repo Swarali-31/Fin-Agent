@@ -609,6 +609,8 @@ def _resolve_step_input(step: PlanStep, state: WorkflowState) -> dict[str, Any]:
             }
     elif step.agent == "financial_research":
         resolved["question"] = resolved.get("question", state.task)
+        if state.context.get("research_financial_context"):
+            resolved["financial_context"] = state.context["research_financial_context"]
     elif step.agent == "budget_planning":
         resolved.update(
             {
@@ -887,6 +889,7 @@ def _claim_paths(agent: str, result: dict[str, Any]) -> list[str]:
             ),
         ],
         "financial_research": [
+            "calculated_answer",
             *(
                 f"findings.{index}.{field}"
                 for index, _ in enumerate(result.get("findings", []))
@@ -940,8 +943,11 @@ def _deterministic_summary(state: WorkflowState, claims: list[ProvenanceClaim]) 
             sentences.append(f"Your budget sets aside {amount(result.get('planned_monthly_savings'))} {result.get('currency', '')} each month. " + ("The savings target fits within your income." if result.get('feasibility', {}).get('is_feasible') else "The requested savings target needs changes; review the budget suggestions."))
         elif step.agent == "financial_research":
             findings = result.get("findings") or []
-            sentences.extend(str(item.get("statement", "")) for item in findings[:3])
-            sentences.append(f"Research returned {len(result.get('sources', []))} sources. Open the source links to read the evidence.")
+            if result.get("calculated_answer"):
+                sentences.append(result["calculated_answer"])
+            else:
+                sentences.extend(str(item.get("statement", "")) for item in findings[:3])
+                sentences.append(f"Research returned {len(result.get('sources', []))} sources. Open the source links to read the evidence.")
         elif step.agent == "financial_report":
             sentences.append("Your report is ready in Reports. " + ("It includes warnings about missing information; review them before using it." if result.get("validation_status") == "flagged" else "The available inputs passed the report checks."))
         if envelope.status == "partial" and step.agent != "financial_report":

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import secrets
+import re
 import time
 from collections import defaultdict, deque
 
@@ -26,10 +27,18 @@ class Credentials(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
     password: str = Field(min_length=8, max_length=128)
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, value: str) -> str:
-        return value.strip().lower()
+        if not isinstance(value, str):
+            raise ValueError("Enter a valid email address, such as you@example.com.")
+        email = value.strip().lower()
+        local, separator, domain = email.partition("@")
+        if (not separator or len(local) > 64 or not re.fullmatch(r"[a-z0-9!#$%&'*+/=?^_`{|}~.-]+", local)
+                or local.startswith(".") or local.endswith(".") or ".." in local
+                or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain)):
+            raise ValueError("Enter a valid email address, such as you@example.com.")
+        return email
 
 
 class Signup(Credentials):

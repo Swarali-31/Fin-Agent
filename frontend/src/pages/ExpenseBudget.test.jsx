@@ -98,6 +98,28 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+it("shows uploaded files after loading saved data and filters their transactions", async () => {
+  localStorage.setItem("finagent.profileId", "TEST files");
+  getLatestExpenseAnalysis.mockRejectedValue({ status: 404, code: "analysis_not_found" });
+  getTransactions.mockResolvedValue({
+    currency: "INR",
+    transactions: [
+      { id: "food", date: "2026-10-01", description: "TEST food", type: "expense", amount: { amount: "100.00" } },
+      { id: "rent", date: "2026-10-02", description: "TEST rent", type: "expense", amount: { amount: "200.00" } },
+    ],
+    imports: [{ id: "batch", filename: "October.csv", format: "csv", imported_at: "2026-10-20T10:00:00Z", transaction_count: 1, transaction_ids: ["food"], period_start: "2026-10-01", period_end: "2026-10-01" }],
+  });
+  render(<ExpenseAnalysis />);
+  const openFile = await screen.findByRole("button", { name: "View transactions for October.csv" });
+  expect(screen.getByRole("button", { name: "Edit TEST rent" })).toBeTruthy();
+  fireEvent.click(openFile);
+  expect(screen.getByRole("button", { name: "Edit TEST food" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Edit TEST rent" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Filter by uploaded file"), { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "Edit TEST rent" })).toBeTruthy();
+  expect(screen.getByText(/original filenames were not stored/)).toBeTruthy();
+});
+
 describe("Expense Analysis page", () => {
   it("reruns saved transactions and displays AI spending insights", async () => {
     localStorage.setItem("finagent.profileId", "TEST FIXTURE: saved-profile");

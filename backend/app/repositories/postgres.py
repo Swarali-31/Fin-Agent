@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
 from typing import Any
@@ -115,7 +115,7 @@ class PostgresRepository:
                 session.add(record)
             else:
                 record.currency = profile.currency
-                record.profile_json = payload
+                record.profile_json = {**payload, "_imports": record.profile_json.get("_imports", [])}
                 record.is_sample = is_sample
         return profile.profile_id
 
@@ -127,7 +127,8 @@ class PostgresRepository:
             return {
                 "profile_id": record.profile_id,
                 "currency": record.currency,
-                "profile": record.profile_json,
+                "profile": {key: value for key, value in record.profile_json.items() if key != "_imports"},
+                "imports": record.profile_json.get("_imports", []),
                 "is_sample": record.is_sample,
             }
 
@@ -138,9 +139,11 @@ class PostgresRepository:
         *,
         currency: str,
         is_sample: bool = False,
+        import_metadata: dict[str, Any] | None = None,
     ) -> int:
         with self._sessions.begin() as session:
-            if session.get(ProfileRecord, profile_id) is None:
+            profile = session.scalar(select(ProfileRecord).where(ProfileRecord.profile_id == profile_id).with_for_update())
+            if profile is None:
                 raise ValueError(f"Profile {profile_id!r} must be saved before its transactions.")
             count = 0
             for transaction in transactions:
@@ -179,6 +182,18 @@ class PostgresRepository:
                     record.transaction_json = payload
                     record.is_sample = is_sample
                 count += 1
+            if import_metadata and transactions:
+                batch = {
+                    "id": str(uuid4()),
+                    "filename": import_metadata["filename"],
+                    "format": import_metadata["format"],
+                    "imported_at": datetime.now(UTC).isoformat(),
+                    "transaction_ids": [transaction.id for transaction in transactions],
+                    "transaction_count": count,
+                    "period_start": min(transaction.date for transaction in transactions).isoformat(),
+                    "period_end": max(transaction.date for transaction in transactions).isoformat(),
+                }
+                profile.profile_json = {**profile.profile_json, "_imports": [batch, *profile.profile_json.get("_imports", [])]}
         return count
 
     def get_transactions(self, profile_id: str) -> list[dict[str, Any]]:

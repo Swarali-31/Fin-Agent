@@ -6,7 +6,7 @@ import asyncio
 import csv
 import io
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Request
 from finagent.sample_data import sample_profile
@@ -16,9 +16,10 @@ from finagent.schemas.expense import ExpenseAnalysisResult
 from finagent.schemas.financial import FinancialProfile, Transaction
 from finagent.schemas.report import FinancialReport
 from finagent.schemas.research import ResearchResult
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.app.config.settings import Settings, get_settings
+from backend.app.services.research_context import build_research_context
 from backend.app.orchestrator.graph import run_workflow
 from backend.app.repositories import PersistenceNotConfigured, Repository, get_repository
 from backend.app.schemas.common import AgentEnvelope
@@ -172,6 +173,14 @@ async def run_specialist(
     revise: bool = False,
 ) -> AgentEnvelope:
     repo = optional_repository(request=request)
+    if agent == "financial_research" and isinstance(payload, dict):
+        payload = dict(payload)
+        payload.pop("financial_context", None)
+        if profile_id:
+            repo = configured_repository(request=request)
+            if repo.get_profile(profile_id) is None:
+                raise APIServiceError(404, "profile_not_found", "Profile was not found.")
+            payload["financial_context"] = build_research_context(repo, profile_id)
     if agent == "expense_analysis" and isinstance(payload, dict) and payload.get("profile_id"):
         repo = configured_repository(request=request)
         payload = {"profile": stored_profile(repo, payload["profile_id"])}
@@ -275,6 +284,12 @@ async def run_specialist(
     return envelope
 
 
+class ImportMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    filename: str = Field(min_length=1, max_length=255, pattern=r"^[^/\\\x00-\x1f]+$")
+    format: Literal["csv", "json"]
+
+
 async def accept_transactions(
     profile_id: str,
     body: Any,
@@ -284,6 +299,13 @@ async def accept_transactions(
     profile_record = repository.get_profile(profile_id)
     if profile_record is None:
         raise APIServiceError(404, "profile_not_found", "Profile was not found.")
+
+    metadata = None
+    if isinstance(body, dict) and body.get("import_metadata") is not None:
+        try:
+            metadata = ImportMetadata.model_validate(body["import_metadata"]).model_dump()
+        except ValidationError as exc:
+            raise APIServiceError(422, "invalid_import_metadata", "Provide a valid filename and CSV or JSON format.") from exc
 
     if "text/csv" in content_type:
         raw_rows = _parse_csv(body)
@@ -342,6 +364,7 @@ async def accept_transactions(
         profile_id,
         valid,
         currency=currency,
+        **({"import_metadata": metadata} if metadata else {}),
     )
     return {"profile_id": profile_id, "inserted": count, "is_sample": False}
 
@@ -396,9 +419,11 @@ async def start_workflow(request: Request, task: str, context: dict[str, Any]) -
     if profile_id is not None and not isinstance(profile_id, str):
         raise APIServiceError(422, "invalid_input", "Profile ID must be a string.")
     context.pop("cached_expense_analysis", None)
+    context.pop("research_financial_context", None)
     if profile_id:
         context["profile_id"] = profile_id
         context["profile"] = stored_profile(repository, profile_id)
+        context["research_financial_context"] = build_research_context(repository, profile_id)
         # Persisted data is authoritative; browser-provided upstream snapshots are not.
         for key in ("transactions", "expense_analysis", "budget", "research"):
             context.pop(key, None)

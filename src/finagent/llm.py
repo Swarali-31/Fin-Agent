@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+import asyncio
+import time
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -92,8 +94,10 @@ class _ResilientModel:
 
     @staticmethod
     def transient(error):
-        code = getattr(error, "status_code", None) or getattr(error, "code", None)
-        return isinstance(error, TimeoutError) or str(code) in {"429", "500", "502", "503", "504"}
+        code = (getattr(error, "status_code", None) or getattr(error, "code", None)
+                or getattr(getattr(error, "response", None), "status_code", None))
+        return (isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower()
+                or str(code) in {"429", "500", "502", "503", "504"})
 
     def with_structured_output(self, schema, **kwargs):
         return _ResilientModel(self.primary.with_structured_output(schema, **kwargs),
@@ -105,7 +109,14 @@ class _ResilientModel:
         except Exception as error:
             if not self.transient(error):
                 raise
-            return self.fallback_factory().invoke(*args, **kwargs)
+            fallback = self.fallback_factory()
+            try:
+                return fallback.invoke(*args, **kwargs)
+            except Exception as fallback_error:
+                if not self.transient(fallback_error):
+                    raise
+                time.sleep(0.5)
+                return fallback.invoke(*args, **kwargs)
 
     async def ainvoke(self, *args, **kwargs):
         try:
@@ -113,4 +124,11 @@ class _ResilientModel:
         except Exception as error:
             if not self.transient(error):
                 raise
-            return await self.fallback_factory().ainvoke(*args, **kwargs)
+            fallback = self.fallback_factory()
+            try:
+                return await fallback.ainvoke(*args, **kwargs)
+            except Exception as fallback_error:
+                if not self.transient(fallback_error):
+                    raise
+                await asyncio.sleep(0.5)
+                return await fallback.ainvoke(*args, **kwargs)

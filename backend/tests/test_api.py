@@ -571,3 +571,55 @@ def test_research_with_profile_appears_in_shared_history(client: Any) -> None:
     items, total = repository.list_research_runs(profile_id="research-profile", limit=10, offset=0)
     assert total == 1
     assert items[0]["result"]["sources"]
+
+
+def test_research_uses_fresh_stored_totals_and_ignores_client_context(client):
+    test_client, repository = client
+    saved = profile("personal-research")
+    repository.save_profile(saved)
+    repository.save_transactions(saved.profile_id, saved.transactions, currency=saved.currency)
+    response = assert_envelope(test_client.post(
+        "/api/v1/agents/financial-research/run?profile_id=personal-research",
+        json={"question": "How can I save more?", "financial_context": {"forged": True}},
+    ))
+    context = response["data"]["result"]["financial_context"]
+    assert context["summary"]["monthly_income"]["amount"] == "1000.00"
+    assert context["summary"]["monthly_expenses"]["amount"] == "200.00"
+    changed = saved.transactions[1].model_copy(update={"amount": Money(amount="350.00")})
+    repository.save_transactions(saved.profile_id, [changed], currency=saved.currency)
+    response = assert_envelope(test_client.post(
+        "/api/v1/agents/financial-research/run?profile_id=personal-research",
+        json={"question": "What is my spending now?"},
+    ))
+    assert response["data"]["result"]["financial_context"]["summary"]["monthly_expenses"]["amount"] == "350.00"
+    assert "TEST-FIXTURE: api-housing" not in str(context)
+
+
+def test_research_missing_profile_rejected_before_model_call(client):
+    test_client, _ = client
+    response = test_client.post("/api/v1/agents/financial-research/run?profile_id=missing", json={"question": "Help me save"})
+    assert response.status_code == 404
+
+
+def test_research_without_profile_does_not_accept_forged_finances(client):
+    test_client, _ = client
+    response = assert_envelope(test_client.post("/api/v1/agents/financial-research/run", json={
+        "question": "How do emergency funds work?", "financial_context": {"forged": True},
+    }))
+    assert response["data"]["result"].get("financial_context") is None
+
+
+def test_personal_research_excludes_stale_budget(client):
+    from backend.app.services.research_context import build_research_context
+    test_client, repository = client
+    saved = profile("research-budget")
+    repository.save_profile(saved)
+    repository.save_transactions(saved.profile_id, saved.transactions, currency=saved.currency)
+    assert_envelope(test_client.post("/api/v1/agents/expense-analysis/run", json={"profile_id": saved.profile_id}))
+    assert_envelope(test_client.post("/api/v1/agents/budget-planning/run?profile_id=research-budget", json={}))
+    assert build_research_context(repository, saved.profile_id)["budget"] is not None
+    changed = saved.transactions[1].model_copy(update={"amount": Money(amount="350.00")})
+    repository.save_transactions(saved.profile_id, [changed], currency=saved.currency)
+    context = build_research_context(repository, saved.profile_id)
+    assert context["budget"] is None
+    assert any("stale" in note for note in context["data_notes"])

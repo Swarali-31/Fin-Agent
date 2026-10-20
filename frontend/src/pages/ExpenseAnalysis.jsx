@@ -155,6 +155,8 @@ export default function ExpenseAnalysis() {
   const [currency, setCurrency] = useState(() => getStored(CURRENCY_KEY, "INR"));
   const [transactions, setTransactions] = useState([]);
   const [savedTransactions, setSavedTransactions] = useState([]);
+  const [imports, setImports] = useState([]);
+  const [selectedImport, setSelectedImport] = useState("");
   const [transactionError, setTransactionError] = useState("");
   const [manual, setManual] = useState({
     id: "",
@@ -180,7 +182,7 @@ export default function ExpenseAnalysis() {
   const skipNextLoadRef = useRef(false);
 
   useEffect(() => {
-    setSelectedRows([]); setDeletedRows([]);
+    setSelectedRows([]); setDeletedRows([]); setSelectedImport(""); setImports([]); setSavedTransactions([]);
   }, [profileId]);
 
   useEffect(() => {
@@ -217,10 +219,20 @@ export default function ExpenseAnalysis() {
   useEffect(() => {
     if (!profileId) return;
     let active = true;
-    getTransactions(profileId).then((data) => { if (active) { setSavedTransactions(data.transactions || []); setTransactionError(""); } })
+    getTransactions(profileId).then((data) => { if (active) { applySavedData(data); setTransactionError(""); } })
       .catch((cause) => { if (active) setTransactionError(cause.message); });
     return () => { active = false; };
   }, [profileId, runKey]);
+
+  function applySavedData(data) {
+    setSavedTransactions(data.transactions || []);
+    setImports(data.imports || []);
+    if (data.currency) { setCurrency(data.currency); setStored(CURRENCY_KEY, data.currency); }
+  }
+  const activeImport = imports.find((item) => item.id === selectedImport);
+  const visibleTransactions = activeImport ? savedTransactions.filter((row) => activeImport.transaction_ids.includes(row.id)) : savedTransactions;
+  const knownImportIds = new Set(imports.flatMap((item) => item.transaction_ids));
+  const untrackedCount = savedTransactions.filter((row) => !knownImportIds.has(row.id)).length;
 
   const summary = analysis?.summary;
   const categoryRows = useMemo(
@@ -264,11 +276,12 @@ export default function ExpenseAnalysis() {
   }
 
   async function analyzeImported() {
+    applySavedData(await getTransactions(profileId));
     const envelope = resultEnvelope(await runExpenseAnalysis({ profile_id: profileId }));
     if (envelope.status === "failed") throw new Error("Analysis could not finish. Your transactions are saved; try again.");
     const payload = analysisPayload(envelope);
     setAnalysis(payload); setAnalysisStatus(payload?.status ?? envelope.status);
-    const records = await getTransactions(profileId); setSavedTransactions(records.transactions || []);
+    const records = await getTransactions(profileId); applySavedData(records);
     setNotice(payload?.status === "success" ? "Your spending analysis is ready below." : "Your totals are ready. Review the note below for any unavailable insights.");
   }
 
@@ -279,7 +292,7 @@ export default function ExpenseAnalysis() {
     try {
       await updateTransactionSelection(profileId, ids, deleted);
       const records = await getTransactions(profileId);
-      setSavedTransactions(records.transactions || []);
+      applySavedData(records);
       setDeletedRows(deleted ? ids : []); setSelectedRows([]); setEditing(null);
       setAnalysis(null); setAnalysisStatus(null);
       setCorrectionMessage(deleted ? "Selected transactions deleted. Analyze again to update your budget." : "Transactions restored. Analyze again to update your results.");
@@ -291,7 +304,7 @@ export default function ExpenseAnalysis() {
     try {
       await correctTransaction(profileId, editing);
       setEditing(null); setAnalysis(null); setAnalysisStatus(null);
-      const records = await getTransactions(profileId); setSavedTransactions(records.transactions || []);
+      const records = await getTransactions(profileId); applySavedData(records);
       setCorrectionMessage("Saved your correction. Analyze your spending again before creating a budget or report.");
     } catch (cause) { setError(cause); } finally { setUploading(false); }
   }
@@ -316,14 +329,15 @@ export default function ExpenseAnalysis() {
     setNotice("Transactions were saved and the latest analysis refreshed.");
   }
 
-  async function persistStagedTransactions(batch) {
-    await addTransactions(profileId, batch);
+  async function persistStagedTransactions(batch, importMetadata) {
+    await addTransactions(profileId, batch, importMetadata);
+    applySavedData(await getTransactions(profileId));
     await runExpenseAnalysis({ profile_id: profileId });
     const latest = await getLatestExpenseAnalysis(profileId);
     const payload = analysisPayload(latest);
     setAnalysis(payload);
     setAnalysisStatus(payload?.status ?? latest?.status ?? "unknown");
-    setTransactions([]);
+    setTransactions((previous) => previous.filter((row) => !batch.some((saved) => saved.id === row.id)));
     setRunKey((value) => value + 1);
     setNotice("Transactions were saved and the latest analysis refreshed.");
   }
@@ -333,7 +347,7 @@ export default function ExpenseAnalysis() {
     setError(null);
     setRowErrors([]);
     try {
-      await persistStagedTransactions(checkedTransactions);
+      await persistStagedTransactions(checkedTransactions, { filename: file.name, format: "json" });
     } catch (uploadError) {
       setError(uploadError);
       setRowErrors(serverRowErrors(uploadError));
@@ -358,7 +372,7 @@ export default function ExpenseAnalysis() {
         );
         setValidationErrors(checked.errors);
         if (!checked.transactions.length) return;
-        if (profileId && transactions.length === 0) {
+        if (profileId) {
           await uploadToExistingProfile(file, checked.transactions);
         } else {
           setTransactions((previous) => [...previous, ...checked.transactions]);
@@ -484,6 +498,19 @@ export default function ExpenseAnalysis() {
           onRetry={() => setRunKey((value) => value + 1)}
         />
       )}
+      <section className="surface-card space-y-3" aria-label="Uploaded files">
+        <h2 className="font-semibold">Your uploaded files ({imports.length})</h2>
+        <p className="text-sm text-slate-600">Saved for profile {profileId || "—"}. Open a file's transactions below, including after signing in again.</p>
+        <DataTable rows={imports} getRowKey={(row) => row.id} emptyTitle="No file history recorded yet. New CSV and JSON imports will appear here." columns={[
+          { key: "filename", header: "File name" },
+          { key: "format", header: "Format", render: (row) => row.format.toUpperCase() },
+          { key: "imported_at", header: "Added", render: (row) => new Date(row.imported_at).toLocaleString() },
+          { key: "transaction_count", header: "Imported rows", numeric: true },
+          { key: "period", header: "Transaction dates", render: (row) => `${row.period_start} – ${row.period_end}` },
+          { key: "view", header: "Open", render: (row) => <button type="button" className="text-brand-blue underline" onClick={() => { setSelectedImport(row.id); setSelectedRows([]); document.getElementById("saved-transactions")?.scrollIntoView?.({ behavior: "smooth" }); }}>View transactions for {row.filename}</button> },
+        ]} />
+        {untrackedCount > 0 && <p className="text-sm text-slate-600">{untrackedCount} saved transaction(s) have no recorded source file (manual entries or older imports). They are available in All transactions; original filenames were not stored for older imports.</p>}
+      </section>
       <CsvImport profileId={profileId} onAnalyze={analyzeImported} onBusy={setUploading} />
       <div className="surface-card flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Analyze saved transactions</h2><p className="mt-1 text-sm text-slate-600">Update insights after changing your transactions.</p></div><button type="button" className="rounded-md bg-brand-blue px-4 py-2 text-white disabled:opacity-50" disabled={!profileId || !savedTransactions.length || loading || uploading} onClick={() => void analyzeSavedTransactions()}>{loading ? "Please wait…" : "Analyze saved transactions"}</button></div>
       {analysis?.is_current === false && <Warning title="Your transactions changed" message="Run Analyze saved transactions again to update these results before creating a budget or report." />}
@@ -567,13 +594,13 @@ export default function ExpenseAnalysis() {
 
       {loading && <Loading label="Loading expense analysis" />}
       {transactionError && <ErrorState title="Saved transactions unavailable" message={transactionError} />}
-      <details className="surface-card"><summary className="cursor-pointer font-semibold">Your saved transactions ({savedTransactions.length}) — manage</summary><div className="my-3 flex gap-4 items-center"><label><input type="checkbox" aria-label="Select all saved transactions" checked={savedTransactions.length > 0 && selectedRows.length === savedTransactions.length} onChange={(event) => setSelectedRows(event.target.checked ? savedTransactions.map((row) => row.id) : [])} /> Select all</label><button type="button" disabled={!selectedRows.length || uploading} className="rounded border border-red-300 px-3 py-2 text-red-700 disabled:opacity-50" onClick={() => changeSelection(true)}>Delete selected ({selectedRows.length})</button></div><DataTable rows={savedTransactions} getRowKey={(row) => row.id} emptyTitle="No saved transactions yet. Add your first expense above." columns={[
+      <section id="saved-transactions" className="surface-card"><h2 className="font-semibold">Your saved transactions ({savedTransactions.length}) — manage</h2><label className="my-3 block text-sm">Show transactions<select aria-label="Filter by uploaded file" className="ml-2 rounded border p-2" value={selectedImport} onChange={(event) => { setSelectedImport(event.target.value); setSelectedRows([]); }}><option value="">All transactions</option>{imports.map((item) => <option key={item.id} value={item.id}>{item.filename} · {new Date(item.imported_at).toLocaleString()}</option>)}</select></label><p className="text-sm text-slate-600">Showing {visibleTransactions.length} saved transaction(s){activeImport ? ` from ${activeImport.filename}` : " across all sources"}.</p><div className="my-3 flex gap-4 items-center"><label><input type="checkbox" aria-label="Select all saved transactions" checked={visibleTransactions.length > 0 && selectedRows.length === visibleTransactions.length} onChange={(event) => setSelectedRows(event.target.checked ? visibleTransactions.map((row) => row.id) : [])} /> Select all</label><button type="button" disabled={!selectedRows.length || uploading} className="rounded border border-red-300 px-3 py-2 text-red-700 disabled:opacity-50" onClick={() => changeSelection(true)}>Delete selected ({selectedRows.length})</button></div><DataTable rows={visibleTransactions} getRowKey={(row) => row.id} emptyTitle={activeImport ? "No active transactions remain for this file." : "No saved transactions yet. Add your first expense above."} columns={[
         { key: "select", header: "Select", render: (row) => <input type="checkbox" aria-label={`Select ${row.description} ${row.date} ${row.id}`} checked={selectedRows.includes(row.id)} onChange={(event) => setSelectedRows((ids) => event.target.checked ? [...ids,row.id] : ids.filter((id) => id !== row.id))} /> },
         { key: "date", header: "Date" }, { key: "description", header: "Description" },
         { key: "type", header: "Type" }, { key: "category", header: "Category", render: (row) => (row.category || "Uncategorized").replaceAll("_", " ") },
         { key: "amount", header: "Amount", numeric: true, render: (row) => formatMoney(row.amount?.amount, currency) },
         { key: "edit", header: "Correct", render: (row) => <button type="button" className="text-brand-blue underline" onClick={() => { setEditing(row); setCorrectionMessage(""); }}>Edit {row.description}</button> },
-      ]} /></details>
+      ]} /></section>
       {!loading && !analysis && !error && transactions.length === 0 && (
         <Empty title="Start with your transactions" description="Upload a CSV, check its preview, then choose Analyze my spending. We will explain where your money went." />
       )}

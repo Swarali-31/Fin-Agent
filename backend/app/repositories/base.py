@@ -42,6 +42,7 @@ class Repository(Protocol):
         *,
         currency: str,
         is_sample: bool = False,
+        import_metadata: dict[str, Any] | None = None,
     ) -> int: ...
 
     def set_transactions_deleted(self, profile_id: str, transaction_ids: list[str], deleted: bool) -> int: ...

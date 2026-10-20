@@ -65,7 +65,7 @@ export default function CsvImport({ profileId, onAnalyze, onBusy }) {
           if (duplicate || used.has(value.id)) value.id = `kept-${crypto.randomUUID()}`;
           used.add(value.id); return value;
         });
-        await addTransactions(profileId, transactions);
+        await addTransactions(profileId, transactions, { filename: file, format: "csv" });
         setSaved(true);
       }
       setPhase("Analyzing your spending… This can take a minute.");

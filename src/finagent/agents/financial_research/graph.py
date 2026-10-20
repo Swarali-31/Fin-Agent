@@ -18,6 +18,7 @@ from finagent.agents.financial_research.prompts import (
     conversational_question,
     synthesis_prompt,
 )
+from finagent.agents.financial_research.cashflow import cashflow_result
 from finagent.agents.financial_research.search import (
     ConfigurationError,
     RawSearchResult,
@@ -47,13 +48,16 @@ _ADVICE_REQUEST_RE = re.compile(
     re.IGNORECASE,
 )
 _PRESCRIPTIVE_RE = re.compile(
-    r"\b(?:you\s+should|i\s+recommend|we\s+recommend|buy\s+(?:shares?\s+of\s+)?|"
-    r"sell\s+(?:shares?\s+of\s+)?|hold\s+(?:shares?\s+of\s+)?|"
-    r"invest\s+(?:in|into)\s+[A-Z][A-Za-z0-9.&-]*)\b",
+    r"\b(?:buy|sell|hold)\s+[^.!?\n]{0,70}\b(?:shares?|stocks?|securities|crypto|tokens?)\b"
+    r"|\b(?:buy|sell|hold)\s+(?:shares?|stocks?|securities|crypto|tokens?)\b",
     re.IGNORECASE,
 )
+_NAMED_INVESTMENT_RE = re.compile(
+    r"\b(?:[Ii]nvest|[Bb]uy|[Ss]ell|[Hh]old)\s+(?:(?:in|into)\s+)?"
+    r"(?:[A-Z]{2,6}\b|[A-Z][A-Za-z0-9.&-]*(?:\s+[A-Z][A-Za-z0-9.&-]*)*\s+(?:shares?|stock|fund)\b)"
+)
 _DISCLAIMER = (
-    "Educational information only; not personalized financial advice. "
+    "Guidance uses the financial details available; it is not a guarantee of returns. "
     "This research does not recommend buying, selling, or holding any specific security."
 )
 
@@ -102,6 +106,22 @@ def _provider_id(provider: SearchProvider) -> str:
     if provider.__class__.__name__ == "TavilySearchProvider":
         return "tavily"
     return str(getattr(provider, "name", provider.__class__.__name__))
+
+
+def _synthesis_failure_message(error: Exception) -> str:
+    """Explain provider failures without exposing credentials or request contents."""
+    status = str(getattr(error, "status_code", None) or getattr(error, "code", ""))
+    if status == "429":
+        return "Sources were found, but the AI provider's quota or request limit was reached. Check the provider quota or try again later."
+    if status in {"401", "403"}:
+        return "Sources were found, but the AI provider denied access. Check the backend model API key and permissions."
+    if status == "404":
+        return "Sources were found, but the configured AI model is unavailable. Check the backend model setting."
+    if status in {"500", "502", "503", "504"}:
+        return "Sources were found, but the AI provider is temporarily unavailable. Please retry shortly."
+    if isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower():
+        return "Sources were found, but the AI answer timed out. Please retry; a brief answer may finish faster."
+    return "Sources were found, but the AI could not produce a valid answer. Please retry; your question does not need to be changed."
 
 
 def _settings() -> Settings:
@@ -177,6 +197,9 @@ def build_research_graph(
                 )
             }
 
+        calculated = cashflow_result(request)
+        if calculated is not None:
+            return {"result": calculated}
         advice_request = _is_advice_request(request.question)
         try:
             model = llm
@@ -329,18 +352,20 @@ def build_research_graph(
                                 }
                                 for source in state["sources"]
                             ],
+                            request.financial_context.model_dump(mode="json") if request.financial_context else None,
+                            response_detail=request.response_detail,
                         )
                     ),
                 ]
             )
             return {"synthesis": ResearchSynthesis.model_validate(response)}
-        except Exception:
+        except Exception as exc:
             return {
                 "limitations": state.get("limitations", [])
                 + [
                     Limitation(
                         code="synthesis_unavailable",
-                        message="We found sources, but could not write an AI summary. Please try again later.",
+                        message=_synthesis_failure_message(exc),
                     )
                 ]
             }
@@ -354,11 +379,12 @@ def build_research_graph(
         for finding in synthesis.findings:
             if not finding.source_ids or any(source_id not in known_ids for source_id in finding.source_ids):
                 continue
-            if _PRESCRIPTIVE_RE.search(finding.statement):
+            if _PRESCRIPTIVE_RE.search(finding.statement) or _NAMED_INVESTMENT_RE.search(finding.statement):
                 continue
             findings.append(
                 ResearchFinding(
                     statement=finding.statement,
+                    title=finding.title,
                     source_ids=finding.source_ids,
                     confidence=finding.confidence,
                 )
@@ -366,7 +392,7 @@ def build_research_graph(
         limitations = list(state.get("limitations", []))
         limitations.extend(
             Limitation(code="research_limitation", message=message)
-            for message in synthesis.limitations
+            for message in dict.fromkeys(message.strip() for message in synthesis.limitations)
             if message.strip()
         )
         if state.get("advice_request"):
@@ -457,7 +483,7 @@ def build_research_graph(
                     message="Search returned no usable sources; no findings were generated.",
                 )
             )
-        elif not findings and not any(item.code == "no_verified_findings" for item in limitations):
+        elif not findings and not any(item.code in {"no_verified_findings", "synthesis_unavailable"} for item in limitations):
             limitations.append(
                 Limitation(
                     code="no_findings",

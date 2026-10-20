@@ -539,3 +539,12 @@ def test_financial_questions_route_to_real_research_without_command_keywords():
         plan=deterministic_plan(question,{})
         assert [step.agent for step in plan.steps]==["financial_research"]
         assert plan.steps[0].input_refs=={"question":"task"}
+
+
+def test_research_step_receives_server_financial_context():
+    from backend.app.orchestrator.graph import _resolve_step_input
+    from backend.app.orchestrator.schemas import PlanStep, WorkflowState
+    financial_context = {"data_notes": ["TEST FIXTURE: saved summary"]}
+    state = WorkflowState(task="Help me save", context={"research_financial_context": financial_context})
+    step = PlanStep(id="research", agent="financial_research", input_refs={"question": "task"})
+    assert _resolve_step_input(step, state)["financial_context"] == financial_context

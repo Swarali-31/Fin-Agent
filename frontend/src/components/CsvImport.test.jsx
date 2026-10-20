@@ -13,7 +13,7 @@ it("previews a CSV without saving, then saves and calls real analysis callback o
  expect(addTransactions).not.toHaveBeenCalled(); expect(analyze).not.toHaveBeenCalled();
  fireEvent.click(screen.getByRole("button",{name:"Analyze my spending"}));
  await waitFor(()=>expect(analyze).toHaveBeenCalledTimes(1));
- expect(addTransactions).toHaveBeenCalledWith("TEST",[transaction]);
+ expect(addTransactions).toHaveBeenCalledWith("TEST",[transaction],{filename:"DEMO.csv",format:"csv"});
 });
 it("does not reimport saved rows when analysis fails and is retried",async()=>{
  const analyze=vi.fn().mockRejectedValueOnce(new Error("AI unavailable")).mockResolvedValueOnce(); render(<CsvImport profileId="TEST" onAnalyze={analyze}/>); await upload();

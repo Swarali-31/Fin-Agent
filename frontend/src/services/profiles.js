@@ -1,9 +1,9 @@
 import { queryString, request } from "./api.js";
 
-export const addTransactions = (profileId, transactions) =>
+export const addTransactions = (profileId, transactions, importMetadata) =>
   request(`/profiles/${encodeURIComponent(profileId)}/transactions`, {
     method: "POST",
-    body: { transactions },
+    body: { transactions, ...(importMetadata ? { import_metadata: importMetadata } : {}) },
   });
 
 export async function uploadTransactionsCsv(profileId, file) {
