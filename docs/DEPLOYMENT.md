@@ -113,3 +113,36 @@ Search and model outages produce honest partial/error states. A Google 503 respo
 `render.yaml` defines one Free Docker web service serving both the React UI and FastAPI, with Supabase retained as the database. Automatic deployment is disabled. Import this repository as a Render Blueprint, supply private credentials through Render's environment settings, and set CORS_ORIGINS to the exact HTTPS service URL before testing sign-in. No secrets are stored in the blueprint. Current model: gemini-3.5-flash-lite.
 
 Render Free services sleep after 15 minutes without incoming traffic, so the first visit can be slow. Provider API quotas/billing are separate from hosting; Free hosting does not make Gemini or Tavily usage unlimited. Existing local records remain in Supabase. A live deployment requires the tested source to be pushed to GitHub and Render repository access to be authorized by the owner.
+
+### Continuous availability and background execution
+
+Render's Free web service spin-down is enforced by the platform. Changing application
+code, adding a health endpoint, or configuring Render health checks cannot disable it.
+Use a paid **service compute instance** for continuous web availability, after the
+owner approves the cost; changing the workspace plan alone does not remove Free
+instance limitations. Keep `plan: free` in this blueprint until that approval exists.
+Do not add periodic wake-up requests as a substitute for an always-on instance.
+See [Render Free instance limits](https://render.com/docs/free).
+
+The existing `/api/v1/health` endpoint is public and checks process liveness without
+calling PostgreSQL, Gemini, or Tavily. A successful health response does not prove
+those integrations work. The Docker command binds `0.0.0.0` to `$PORT` (8000 locally)
+and uses `exec` so Uvicorn receives container termination signals directly.
+
+Master Agent workflows currently use `asyncio.create_task` in the API process. They
+do not need polling requests to execute, but their execution cannot survive process
+termination; persisted workflow records are not a durable execution queue. For jobs
+that must continue independently and recover after restarts, move execution to a
+durable queue with a separately deployed persistent worker and retry/recovery logic.
+Do not deploy another copy of the web server as a worker. Worker/queue provisioning
+and any resulting charges require approval. See
+[Render background workers](https://render.com/docs/background-workers).
+
+`autoDeployTrigger: off` means a Git push alone does not deploy this blueprint's
+service. Confirm the live service's repository, deployment branch, instance type,
+Docker command overrides, environment variable presence, health path, deployment
+events, and build/runtime logs in Render before triggering a manual deployment.
+Never copy secret values into logs or this document. After deployment, verify the
+public landing page, `/api/v1/health`, and `/api/v1/agents`, then inspect logs and an
+authorized database-backed request. A Free service passing these checks will still
+sleep after inactivity.

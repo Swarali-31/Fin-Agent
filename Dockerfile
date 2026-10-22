@@ -17,4 +17,4 @@ COPY --from=frontend /build/dist ./frontend/dist
 RUN useradd --create-home finagent
 USER finagent
 EXPOSE 8000
-CMD ["sh", "-c", "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec python -m uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
