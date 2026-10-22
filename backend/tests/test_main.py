@@ -20,3 +20,13 @@ def test_health_response_envelope_and_request_id() -> None:
         "warnings": [],
         "error": None,
     }
+
+
+def test_unsupported_health_method_preserves_http_status_and_allow_header() -> None:
+    client = TestClient(app)
+
+    response = client.post("/api/v1/health")
+
+    assert response.status_code == 405
+    assert "GET" in response.headers["Allow"]
+    assert response.json()["error"]["code"] == "http_error"

@@ -77,7 +77,7 @@ if (_frontend / "index.html").is_file():
 
     app.mount("/assets", StaticFiles(directory=_frontend / "assets"), name="assets")
 
-    @app.get("/{path:path}", include_in_schema=False)
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def frontend_page(path: str):
         if path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Endpoint not found.")

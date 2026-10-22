@@ -94,14 +94,17 @@ def install_exception_handlers(app: Any) -> None:
         request: Request,
         exc: StarletteHTTPException,
     ) -> JSONResponse:
-        status_code = exc.status_code if exc.status_code in {400, 404, 409, 422, 503} else 500
-        return _error_response(
+        status_code = exc.status_code if 400 <= exc.status_code <= 599 else 500
+        response = _error_response(
             request,
             status_code,
             "http_error",
             str(exc.detail),
             None,
         )
+        if exc.headers:
+            response.headers.update(exc.headers)
+        return response
 
     @app.exception_handler(Exception)
     async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
