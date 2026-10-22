@@ -97,9 +97,17 @@ class PostgresRepository:
 
     def list_profiles(self) -> list[dict[str, Any]]:
         with self._sessions() as session:
-            return [{"profile_id": row.profile_id, "currency": row.currency,
-                     "is_sample": row.is_sample}
-                    for row in session.scalars(select(ProfileRecord).order_by(ProfileRecord.profile_id))]
+            counts = dict(session.execute(select(TransactionRecord.profile_id, func.count(TransactionRecord.id))
+                .where(func.coalesce(TransactionRecord.transaction_json["_finagent_deleted"].as_boolean(), False).is_(False))
+                .group_by(TransactionRecord.profile_id)).all())
+            totals = dict(session.execute(select(TransactionRecord.profile_id, func.count(TransactionRecord.id)).group_by(TransactionRecord.profile_id)).all())
+            profiles = [{"profile_id": row.profile_id, "currency": row.currency,
+                         "is_sample": row.is_sample, "transaction_count": counts.get(row.profile_id, 0),
+                         "deleted_count": totals.get(row.profile_id, 0) - counts.get(row.profile_id, 0),
+                         "file_count": len(row.profile_json.get("_imports", []))}
+                        for row in session.scalars(select(ProfileRecord).order_by(ProfileRecord.updated_at.desc(), ProfileRecord.profile_id))]
+            # A fresh login should open existing data before empty profile shells.
+            return sorted(profiles, key=lambda row: row["transaction_count"] > 0 or row["file_count"] > 0, reverse=True)
 
     def save_profile(self, profile: FinancialProfile, *, is_sample: bool = False) -> str:
         payload = _payload(profile)
@@ -145,6 +153,7 @@ class PostgresRepository:
             profile = session.scalar(select(ProfileRecord).where(ProfileRecord.profile_id == profile_id).with_for_update())
             if profile is None:
                 raise ValueError(f"Profile {profile_id!r} must be saved before its transactions.")
+            profile.updated_at = datetime.now(UTC)
             count = 0
             for transaction in transactions:
                 payload = _payload(transaction)
@@ -196,7 +205,7 @@ class PostgresRepository:
                 profile.profile_json = {**profile.profile_json, "_imports": [batch, *profile.profile_json.get("_imports", [])]}
         return count
 
-    def get_transactions(self, profile_id: str) -> list[dict[str, Any]]:
+    def get_transactions(self, profile_id: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         with self._sessions() as session:
             rows = session.scalars(
                 select(TransactionRecord)
@@ -210,9 +219,10 @@ class PostgresRepository:
                     "amount": str(row.amount.quantize(Decimal("0.01"))),
                     "currency": row.currency,
                     "is_sample": row.is_sample,
-                    "transaction": row.transaction_json,
+                    "transaction": {key: value for key, value in row.transaction_json.items() if key != "_finagent_deleted"},
+                    "deleted": bool(row.transaction_json.get("_finagent_deleted", False)),
                 }
-                for row in rows if not row.transaction_json.get("_finagent_deleted", False)
+                for row in rows if include_deleted or not row.transaction_json.get("_finagent_deleted", False)
             ]
 
     def set_transactions_deleted(self, profile_id: str, transaction_ids: list[str], deleted: bool) -> int:

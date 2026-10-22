@@ -18,6 +18,7 @@ vi.mock("../services/profiles.js", () => ({
   previewTransactionsCsv: vi.fn(),
   correctTransaction: vi.fn(),
   updateTransactionSelection: vi.fn(),
+  listProfiles: vi.fn(),
 }));
 vi.mock("../services/budgets.js", () => ({
   listBudgets: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock("../services/budgets.js", () => ({
 
 import { createBudget, reviseBudget, runExpenseAnalysis } from "../services/agents.js";
 import { getBudgetHistory, listBudgets } from "../services/budgets.js";
-import { getLatestExpenseAnalysis, getTransactions, updateTransactionSelection } from "../services/profiles.js";
+import { getLatestExpenseAnalysis, getTransactions, updateTransactionSelection, listProfiles } from "../services/profiles.js";
 
 const analysisFixture = {
   agent: "expense_analysis",
@@ -94,6 +95,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.resetAllMocks();
   getTransactions.mockResolvedValue({ transactions: [] });
+  listProfiles.mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -118,6 +120,49 @@ it("shows uploaded files after loading saved data and filters their transactions
   fireEvent.change(screen.getByLabelText("Filter by uploaded file"), { target: { value: "" } });
   expect(screen.getByRole("button", { name: "Edit TEST rent" })).toBeTruthy();
   expect(screen.getByText(/original filenames were not stored/)).toBeTruthy();
+});
+
+it("loads saved data when choosing a different financial profile", async () => {
+  localStorage.setItem("finagent.profileId", "empty");
+  listProfiles.mockResolvedValue([{profile_id:"empty",currency:"INR",transaction_count:0,file_count:0},{profile_id:"history",currency:"USD",transaction_count:1,file_count:1}]);
+  getLatestExpenseAnalysis.mockRejectedValue({status:404,code:"analysis_not_found"});
+  getTransactions.mockImplementation(async (id) => ({currency:id === "history" ? "USD" : "INR", transactions:id === "history" ? [{id:"old",description:"Saved last session",date:"2026-01-01",type:"expense",amount:{amount:"50.00"}}] : []}));
+  render(<ExpenseAnalysis />);
+  await screen.findByRole("option", {name:/history · USD · 1 transactions · 1 files/});
+  fireEvent.change(screen.getByLabelText("Financial profile"), {target:{value:"history"}});
+  expect(await screen.findByRole("button", {name:"Edit Saved last session"})).toBeTruthy();
+  expect(localStorage.getItem("finagent.profileId")).toBe("history");
+  expect(localStorage.getItem("finagent.currency")).toBe("USD");
+});
+
+it("keeps long transaction histories manageable with search and pagination", async () => {
+  localStorage.setItem("finagent.profileId", "history");
+  getLatestExpenseAnalysis.mockRejectedValue({status:404,code:"analysis_not_found"});
+  getTransactions.mockResolvedValue({transactions:Array.from({length:12}, (_,i) => ({id:String(i),description:`Purchase ${i+1}`,date:"2026-01-01",type:"expense",amount:{amount:"10.00"}}))});
+  render(<ExpenseAnalysis />);
+  await screen.findByRole("button", {name:"Edit Purchase 1",exact:true});
+  expect(screen.queryByRole("button", {name:"Edit Purchase 12",exact:true})).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name:"Next",exact:true}));
+  expect(screen.getByRole("button", {name:"Edit Purchase 12",exact:true})).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Search saved transactions"), {target:{value:"Purchase 12"}});
+  expect(screen.getByText(/Page 1 of 1/)).toBeTruthy();
+  expect(screen.queryByRole("button", {name:"Edit Purchase 11",exact:true})).toBeNull();
+});
+
+it("shows deleted expenses after loading and allows persistent restoration", async () => {
+  localStorage.setItem("finagent.profileId","history");
+  const row = {id:"deleted-food",description:"Earlier groceries",date:"2026-01-01",type:"expense",amount:{amount:"100.00"}};
+  getLatestExpenseAnalysis.mockRejectedValue({status:404,code:"analysis_not_found"});
+  getTransactions.mockResolvedValueOnce({transactions:[],deleted_transactions:[row]})
+    .mockResolvedValue({transactions:[row],deleted_transactions:[]});
+  updateTransactionSelection.mockResolvedValue({updated:1,deleted:false});
+  render(<ExpenseAnalysis />);
+  fireEvent.click(await screen.findByRole("button",{name:"Deleted (1)"}));
+  fireEvent.click(screen.getByRole("button",{name:"Restore Earlier groceries"}));
+  await screen.findByRole("button",{name:"Active (1)"});
+  expect(updateTransactionSelection).toHaveBeenCalledWith("history",["deleted-food"],false);
+  fireEvent.click(screen.getByRole("button",{name:"Active (1)"}));
+  expect(screen.getByRole("button",{name:"Edit Earlier groceries"})).toBeTruthy();
 });
 
 describe("Expense Analysis page", () => {
